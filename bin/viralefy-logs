@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Tail dos logs dos serviços via journalctl.
+# Uso:  viralefy-logs                # todos
+#       viralefy-logs api             # só api
+#       viralefy-logs front -n 200    # front com 200 linhas
+set -uo pipefail
+
+mapper() {
+  case "${1:-all}" in
+    api)        echo "viralefy-api" ;;
+    front)      echo "viralefy-front" ;;
+    backoffice) echo "viralefy-backoffice" ;;
+    all|"")     echo "viralefy-api viralefy-front viralefy-backoffice" ;;
+    *) echo "viralefy-$1" ;;
+  esac
+}
+
+units=$(mapper "${1:-all}")
+shift 2>/dev/null || true
+args=("$@")
+[[ ${#args[@]} -eq 0 ]] && args=(-f -n 50)
+
+# shellcheck disable=SC2086
+exec journalctl ${units// / -u } -u $units "${args[@]}"

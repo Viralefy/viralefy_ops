@@ -1,0 +1,54 @@
+[Unit]
+Description=Viralefy API (Go)
+Documentation=https://github.com/Viralefy/viralefy_api
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=viralefy-api
+Group=viralefy
+WorkingDirectory=/viralefy/api
+EnvironmentFile=/etc/viralefy/.env
+ExecStart=/viralefy/api/bin/viralefy-api
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+# Hardening (systemd.exec)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateMounts=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/viralefy/api
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=viralefy-api
+
+[Install]
+WantedBy=multi-user.target

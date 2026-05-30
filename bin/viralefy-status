@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Visão rápida do estado do stack: systemd, portas, healthchecks.
+set -uo pipefail
+
+services=(viralefy-api viralefy-front viralefy-backoffice)
+ports=(8080 3000 3001)
+
+bold() { printf '\e[1m%s\e[0m\n' "$*"; }
+ok()   { printf '  \e[32m✓\e[0m %s\n' "$*"; }
+no()   { printf '  \e[31m✗\e[0m %s\n' "$*"; }
+warn() { printf '  \e[33m!\e[0m %s\n' "$*"; }
+
+bold "Serviços (systemd):"
+for s in "${services[@]}"; do
+  state="$(systemctl is-active "$s" 2>/dev/null || true)"
+  enabled="$(systemctl is-enabled "$s" 2>/dev/null || true)"
+  if [[ "$state" == "active" ]]; then
+    ok "$s — active ($enabled)"
+  else
+    no "$s — $state ($enabled)"
+  fi
+done
+
+bold "Portas:"
+for p in "${ports[@]}"; do
+  if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$p$"; then
+    ok ":$p ouvindo"
+  else
+    no ":$p sem listener"
+  fi
+done
+
+bold "Health:"
+for u in \
+  "API|http://127.0.0.1:8080/health" \
+  "FRONT|http://127.0.0.1:3000" \
+  "BACKOFFICE|http://127.0.0.1:3001/login"; do
+  name="${u%%|*}"; url="${u##*|}"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$url" || echo "—")"
+  if [[ "$code" == "200" ]]; then ok "$name $code"; else no "$name $code  $url"; fi
+done
+
+bold "PostgreSQL:"
+if systemctl is-active postgresql >/dev/null 2>&1; then
+  ok "postgresql active"
+  if sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='viralefy'" 2>/dev/null | grep -q 1; then
+    ok "DB viralefy existe"
+  else
+    no "DB viralefy não existe"
+  fi
+else
+  no "postgresql inativo"
+fi

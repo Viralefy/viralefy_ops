@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# viralefy-install — bootstrap completo do stack Viralefy em /viralefy/.
+#
+# Idempotente em reexecuções; destrutivo apenas durante updates (via
+# viralefy-update). Roda como root; cada serviço corre como usuário próprio.
+#
+# Uso:
+#   sudo viralefy-install
+#   sudo RESEND_API_KEY=re_xxx viralefy-install        # não-interativo
+#   sudo VIRALEFY_BRANCH=master viralefy-install       # branch alternativa
+#
+# Variáveis de ambiente reconhecidas:
+#   VIRALEFY_GH_ORG     org GitHub (default Viralefy)
+#   VIRALEFY_REPO_BASE  base URL (default https://github.com/<ORG>)
+#   VIRALEFY_BRANCH     branch dos repos (default main)
+#   RESEND_API_KEY      chave Resend (escrita em /etc/viralefy/.env)
+
+set -euo pipefail
+IFS=$'\n\t'
+
+OPS_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# shellcheck source=../installer/lib.sh
+source "$OPS_DIR/installer/lib.sh"
+# shellcheck source=../installer/00-prereqs.sh
+source "$OPS_DIR/installer/00-prereqs.sh"
+# shellcheck source=../installer/10-users.sh
+source "$OPS_DIR/installer/10-users.sh"
+# shellcheck source=../installer/20-postgres.sh
+source "$OPS_DIR/installer/20-postgres.sh"
+# shellcheck source=../installer/30-secrets.sh
+source "$OPS_DIR/installer/30-secrets.sh"
+# shellcheck source=../installer/40-clone.sh
+source "$OPS_DIR/installer/40-clone.sh"
+# shellcheck source=../installer/50-build.sh
+source "$OPS_DIR/installer/50-build.sh"
+# shellcheck source=../installer/60-systemd.sh
+source "$OPS_DIR/installer/60-systemd.sh"
+# shellcheck source=../installer/70-start.sh
+source "$OPS_DIR/installer/70-start.sh"
+
+main() {
+  require_root
+  log "Viralefy installer — destino $ROOT_DIR (branch $BRANCH, org $ORG)"
+
+  install_prereqs
+  install_users
+  install_secrets
+  install_postgres_role
+  install_clone
+  ensure_ops_in_place "$@"
+  install_build
+  install_systemd
+  install_start
+
+  echo
+  info "Instalação concluída."
+  echo "  - segredos:   $ENV_FILE"
+  echo "  - pacotes:    $(IFS=, ; echo "${PACKAGES[*]}") em $ROOT_DIR/"
+  echo "  - serviços:   systemctl status viralefy-{api,front,backoffice}"
+  echo "  - atualizar:  sudo viralefy-update    (DESTRUTIVO)"
+  echo "  - status:     viralefy-status"
+}
+
+# Se rodamos a partir de um tarball/temp dir, depois do clone copiamos para
+# $ROOT_DIR/ops a versão definitiva (que terá os arquivos atualizados).
+ensure_ops_in_place() {
+  local target; target="$(dir_of ops)"
+  if [[ "$OPS_DIR" != "$target" ]]; then
+    log "movendo viralefy_ops para $target"
+    rm -rf "$target"
+    git clone --depth 1 --branch "$BRANCH" "$(repo_of ops)" "$target"
+    chown -R root:root "$target"
+  fi
+}
+
+main "$@"

@@ -1,0 +1,52 @@
+[Unit]
+Description=Viralefy Front (Next.js storefront)
+Documentation=https://github.com/Viralefy/viralefy_front
+After=network-online.target viralefy-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=viralefy-front
+Group=viralefy
+WorkingDirectory=/viralefy/front
+EnvironmentFile=/etc/viralefy/.env
+Environment=NODE_ENV=production
+Environment=PATH=/usr/bin:/usr/local/bin
+ExecStart=/usr/bin/npm run start -- -p 3000
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+# Hardening — Node faz JIT; não usar MemoryDenyWriteExecute.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/viralefy/front
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=viralefy-front
+
+[Install]
+WantedBy=multi-user.target

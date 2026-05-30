@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# viralefy-update — atualização DESTRUTIVA do stack.
+#
+# Por especificação do projeto: rm -rf em /viralefy/<pkg> (incluindo ops) e
+# reconstrói do zero a partir do GitHub. Segredos em /etc/viralefy/.env e o
+# DB PostgreSQL ficam intocados.
+#
+# O script se copia para /tmp antes de apagar /viralefy/ops, pois é parte do
+# que será apagado. Sobrevive ao próprio rm -rf assim.
+
+set -euo pipefail
+IFS=$'\n\t'
+
+ROOT_DIR=/viralefy
+ENV_FILE=/etc/viralefy/.env
+ORG="${VIRALEFY_GH_ORG:-Viralefy}"
+REPO_BASE="${VIRALEFY_REPO_BASE:-https://github.com/$ORG}"
+BRANCH="${VIRALEFY_BRANCH:-main}"
+
+[[ $EUID -eq 0 ]] || { echo "Precisa rodar como root."; exit 1; }
+
+echo "[1/5] Parando serviços..."
+systemctl stop viralefy-api viralefy-front viralefy-backoffice 2>/dev/null || true
+
+# Confirmação se rodando interativo e a flag --yes não veio.
+if [[ -t 0 && "${1:-}" != "--yes" ]]; then
+  echo
+  echo "ATENÇÃO: vou apagar TUDO em $ROOT_DIR/ (api, front, backoffice, ops, archive)"
+  echo "         e reclonar de $REPO_BASE branch $BRANCH."
+  echo "         /etc/viralefy/.env e o banco PostgreSQL são preservados."
+  read -r -p "Continuar? [y/N] " ans
+  [[ "$ans" == "y" || "$ans" == "Y" ]] || { echo "abortado."; exit 1; }
+fi
+
+echo "[2/5] Apagando /viralefy/* ..."
+rm -rf "$ROOT_DIR/api" "$ROOT_DIR/front" "$ROOT_DIR/backoffice" "$ROOT_DIR/ops" "$ROOT_DIR/archive"
+
+echo "[3/5] Clonando viralefy_ops para /tmp ..."
+STAGE="$(mktemp -d /tmp/viralefy-ops.XXXXXX)"
+trap 'rm -rf "$STAGE"' EXIT
+git clone --depth 1 --branch "$BRANCH" "$REPO_BASE/viralefy_ops.git" "$STAGE" >/dev/null
+
+echo "[4/5] Carregando segredos de $ENV_FILE ..."
+if [[ -f "$ENV_FILE" ]]; then
+  # shellcheck disable=SC1090
+  set -a; source "$ENV_FILE"; set +a
+fi
+
+echo "[5/5] Executando viralefy-install a partir de $STAGE ..."
+exec "$STAGE/bin/viralefy-install"
