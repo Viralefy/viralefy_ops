@@ -35,6 +35,15 @@ install_secrets() {
   : "${RESEND_FROM_NAME:=Viralefy}"
   : "${RESEND_BASE_URL:=https://api.resend.com}"
 
+  # ---- Bing IndexNow ---- #
+  # Chave pública vai exposta em /<INDEXNOW_KEY>.txt no front.
+  # Secret gates o endpoint /api/indexnow contra abuso. Ambos sobrevivem
+  # ao update destrutivo. INDEXNOW_KEY tem default hardcoded p/ casar com
+  # o arquivo já hospedado em viralefy_front/public/ — só gera novo se o
+  # operador definir manualmente antes do install.
+  : "${INDEXNOW_KEY:=adcfcb87889076210f395f754a9ad0c3}"
+  : "${INDEXNOW_SECRET:=$(gen_secret 24)}"
+
   # Domínios públicos servidos por Caddy. Default localhost — Caddy usa CA local.
   : "${DOMAIN_FRONT:=localhost}"
   : "${DOMAIN_BACKOFFICE:=admin.localhost}"
@@ -85,6 +94,10 @@ install_secrets() {
 		RESEND_FROM=$RESEND_FROM
 		RESEND_FROM_NAME=$RESEND_FROM_NAME
 		RESEND_BASE_URL=$RESEND_BASE_URL
+
+		# ---- Bing IndexNow ---- #
+		INDEXNOW_KEY=$INDEXNOW_KEY
+		INDEXNOW_SECRET=$INDEXNOW_SECRET
 
 		# ---- Front / Backoffice (Next.js — usadas em build) ---- #
 		NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
