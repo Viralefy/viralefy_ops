@@ -30,6 +30,8 @@ source "$OPS_DIR/installer/10-users.sh"
 source "$OPS_DIR/installer/20-postgres.sh"
 # shellcheck source=../installer/30-secrets.sh
 source "$OPS_DIR/installer/30-secrets.sh"
+# shellcheck source=../installer/35-caddy.sh
+source "$OPS_DIR/installer/35-caddy.sh"
 # shellcheck source=../installer/40-clone.sh
 source "$OPS_DIR/installer/40-clone.sh"
 # shellcheck source=../installer/50-build.sh
@@ -51,15 +53,17 @@ main() {
   ensure_ops_in_place "$@"
   install_build
   install_systemd
+  install_caddy_config
   install_start
 
   echo
   info "Instalação concluída."
-  echo "  - segredos:   $ENV_FILE"
-  echo "  - pacotes:    $(IFS=, ; echo "${PACKAGES[*]}") em $ROOT_DIR/"
-  echo "  - serviços:   systemctl status viralefy-{api,front,backoffice}"
-  echo "  - atualizar:  sudo viralefy-update    (DESTRUTIVO)"
-  echo "  - status:     viralefy-status"
+  echo "  - segredos:    $ENV_FILE"
+  echo "  - pacotes:     $(IFS=, ; echo "${PACKAGES[*]}") em $ROOT_DIR/"
+  echo "  - serviços:    systemctl status viralefy-{api,front,backoffice} caddy"
+  echo "  - URLs:        https://$DOMAIN_FRONT  ·  https://$DOMAIN_BACKOFFICE  ·  https://$DOMAIN_API"
+  echo "  - atualizar:   sudo viralefy-update    (DESTRUTIVO)"
+  echo "  - status:      viralefy-status"
 }
 
 # Se rodamos a partir de um tarball/temp dir, depois do clone copiamos para

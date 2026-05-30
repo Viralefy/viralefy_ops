@@ -2,8 +2,7 @@
 # Visão rápida do estado do stack: systemd, portas, healthchecks.
 set -uo pipefail
 
-services=(viralefy-api viralefy-front viralefy-backoffice)
-ports=(8080 3000 3001)
+services=(viralefy-api viralefy-front viralefy-backoffice caddy)
 
 bold() { printf '\e[1m%s\e[0m\n' "$*"; }
 ok()   { printf '  \e[32m✓\e[0m %s\n' "$*"; }
@@ -22,7 +21,7 @@ for s in "${services[@]}"; do
 done
 
 bold "Portas:"
-for p in "${ports[@]}"; do
+for p in 8080 3000 3001 80 443; do
   if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$p$"; then
     ok ":$p ouvindo"
   else
@@ -30,7 +29,13 @@ for p in "${ports[@]}"; do
   fi
 done
 
-bold "Health:"
+# Carrega DOMAIN_* do .env (read-only) — só pra mostrar URLs no status.
+if [[ -r /etc/viralefy/.env ]]; then
+  # shellcheck disable=SC1091
+  set -a; source /etc/viralefy/.env; set +a
+fi
+
+bold "Health (loopback — apps):"
 for u in \
   "API|http://127.0.0.1:8080/health" \
   "FRONT|http://127.0.0.1:3000" \
@@ -39,6 +44,27 @@ for u in \
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$url" || echo "—")"
   if [[ "$code" == "200" ]]; then ok "$name $code"; else no "$name $code  $url"; fi
 done
+
+if [[ -n "${DOMAIN_API:-}" ]]; then
+  bold "Health (público — via Caddy):"
+  for u in \
+    "API|https://${DOMAIN_API}/health" \
+    "FRONT|https://${DOMAIN_FRONT}" \
+    "BACKOFFICE|https://${DOMAIN_BACKOFFICE}/login"; do
+    name="${u%%|*}"; url="${u##*|}"
+    code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || echo "—")"
+    if [[ "$code" =~ ^[23] ]]; then ok "$name $code  $url"; else no "$name $code  $url"; fi
+  done
+fi
+
+bold "Caddy:"
+if [[ -f /etc/caddy/Caddyfile ]]; then
+  if caddy validate --config /etc/caddy/Caddyfile --envfile /etc/caddy/viralefy.env >/dev/null 2>&1; then
+    ok "Caddyfile válido"
+  else
+    no "Caddyfile inválido — sudo caddy validate --config /etc/caddy/Caddyfile --envfile /etc/caddy/viralefy.env"
+  fi
+fi
 
 bold "PostgreSQL:"
 if systemctl is-active postgresql >/dev/null 2>&1; then

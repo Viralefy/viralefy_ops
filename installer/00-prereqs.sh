@@ -11,11 +11,13 @@ install_prereqs() {
   apt-get install -y -qq \
     git curl jq ca-certificates gnupg lsb-release \
     build-essential pkg-config \
-    sudo openssl >/dev/null
+    sudo openssl \
+    debian-keyring debian-archive-keyring apt-transport-https >/dev/null
 
   install_go
   install_node
   install_postgres
+  install_caddy
 }
 
 install_go() {
@@ -62,4 +64,24 @@ install_postgres() {
     || apt-get install -y -qq postgresql postgresql-client >/dev/null
   systemctl enable --now postgresql >/dev/null
   info "PostgreSQL pronto"
+}
+
+install_caddy() {
+  if command -v caddy >/dev/null && systemctl list-unit-files caddy.service >/dev/null 2>&1; then
+    info "Caddy já instalado"
+    return
+  fi
+  log "instalando Caddy (repo oficial Cloudsmith)"
+  local keyring=/usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  if [[ ! -f "$keyring" ]]; then
+    curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+      | gpg --dearmor -o "$keyring"
+  fi
+  if [[ ! -f /etc/apt/sources.list.d/caddy-stable.list ]]; then
+    curl -fsSL "https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt?distro=debian&codename=$(. /etc/os-release && echo "${VERSION_CODENAME:-bookworm}")" \
+      | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
+  fi
+  apt-get update -y -qq
+  apt-get install -y -qq caddy >/dev/null
+  info "Caddy $(caddy version 2>/dev/null | head -1)"
 }

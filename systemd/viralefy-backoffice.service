@@ -12,7 +12,7 @@ WorkingDirectory=/viralefy/backoffice
 EnvironmentFile=/etc/viralefy/.env
 Environment=NODE_ENV=production
 Environment=PATH=/usr/bin:/usr/local/bin
-ExecStart=/usr/bin/npm run start -- -p 3001
+ExecStart=/usr/bin/npm run start -- -p 3001 -H 127.0.0.1
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30

@@ -1,0 +1,87 @@
+# Viralefy — Caddy reverse proxy + TLS automático.
+# Variáveis vêm de /etc/caddy/viralefy.env (DOMAIN_*, CADDY_EMAIL).
+# Apps escutam só em 127.0.0.1; Caddy é a única superfície pública.
+
+{
+	email {$CADDY_EMAIL}
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+# ---------------- Loja ---------------- #
+{$DOMAIN_FRONT} {
+	encode zstd gzip
+
+	header {
+		# HSTS (1 ano, subdomínios, preload).
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "interest-cohort=(), browsing-topics=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		-Server
+		-X-Powered-By
+	}
+
+	reverse_proxy 127.0.0.1:3000 {
+		header_up X-Real-IP {http.request.remote.host}
+	}
+
+	log {
+		output stderr
+		format json
+	}
+}
+
+# ---------------- Backoffice ---------------- #
+{$DOMAIN_BACKOFFICE} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Content-Security-Policy "frame-ancestors 'none'"
+		Permissions-Policy "interest-cohort=(), browsing-topics=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		-Server
+		-X-Powered-By
+	}
+
+	reverse_proxy 127.0.0.1:3001 {
+		header_up X-Real-IP {http.request.remote.host}
+	}
+
+	log {
+		output stderr
+		format json
+	}
+}
+
+# ---------------- API ---------------- #
+{$DOMAIN_API} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin"
+		Cross-Origin-Opener-Policy "same-origin"
+		-Server
+		-X-Powered-By
+	}
+
+	# /health e /ready continuam públicos (necessários p/ load balancers).
+	# CORS é responsabilidade da API (CORS_ORIGINS em .env).
+
+	reverse_proxy 127.0.0.1:8080 {
+		header_up X-Real-IP {http.request.remote.host}
+	}
+
+	log {
+		output stderr
+		format json
+	}
+}
