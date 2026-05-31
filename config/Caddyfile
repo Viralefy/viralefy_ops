@@ -9,6 +9,13 @@
 	}
 }
 
+# ---------------- www → apex (canônico) ---------------- #
+# Garante HTTPS cert para www.viralefy.com e redireciona 301 pro apex.
+# Sem isso, www.viralefy.com dá SSL error porque Caddy não emite cert.
+www.{$DOMAIN_FRONT} {
+	redir https://{$DOMAIN_FRONT}{uri} 301
+}
+
 # ---------------- Loja ---------------- #
 {$DOMAIN_FRONT} {
 	encode zstd gzip
