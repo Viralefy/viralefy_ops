@@ -16,10 +16,11 @@ Environment=GF_PATHS_LOGS=/var/log/grafana
 Environment=GF_PATHS_PLUGINS=/var/lib/grafana/plugins
 Environment=GF_PATHS_PROVISIONING=/etc/grafana/provisioning
 EnvironmentFile=-/etc/viralefy/.env
-ExecStart=/usr/sbin/grafana-server \
+ExecStart=/usr/sbin/grafana server \
     --config=/etc/grafana/grafana.ini \
     --pidfile=/run/grafana/grafana-server.pid \
     --packaging=deb \
+    --homepath=/usr/share/grafana \
     cfg:default.paths.logs=/var/log/grafana \
     cfg:default.paths.data=/var/lib/grafana \
     cfg:default.paths.plugins=/var/lib/grafana/plugins \
