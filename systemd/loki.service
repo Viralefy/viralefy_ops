@@ -1,22 +1,17 @@
 [Unit]
-Description=Viralefy API (Go)
-Documentation=https://github.com/Viralefy/viralefy_api
-After=network-online.target postgresql.service
+Description=Loki (Viralefy log aggregation)
+Documentation=https://grafana.com/docs/loki/
+After=network-online.target
 Wants=network-online.target
-Requires=postgresql.service
 
 [Service]
 Type=simple
-User=viralefy-api
-Group=viralefy
-WorkingDirectory=/viralefy/api
-EnvironmentFile=/etc/viralefy/.env
-# OTel — exporta traces pra Tempo local. Mesmo se o .env não declarar (envio
-# OTLP HTTP é opt-in via InitTracer), garantimos o default aqui.
-Environment=OTEL_SERVICE_NAME=viralefy-api
-Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
-Environment=OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-ExecStart=/viralefy/api/bin/viralefy-api
+User=loki
+Group=loki
+WorkingDirectory=/var/lib/loki
+ExecStart=/usr/local/bin/loki \
+    -config.file=/etc/loki/loki.yaml \
+    -config.expand-env=false
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
@@ -47,13 +42,12 @@ SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadWritePaths=/viralefy/api
+ReadWritePaths=/var/lib/loki
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
-# Journald
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=viralefy-api
+SyslogIdentifier=loki
 
 [Install]
 WantedBy=multi-user.target

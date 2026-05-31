@@ -1,0 +1,17 @@
+# Provisioning de dashboards — copiado para
+# /etc/grafana/provisioning/dashboards/viralefy.yaml. O Grafana varre o path
+# em `options.path` (recursivo) e carrega todo JSON encontrado.
+apiVersion: 1
+
+providers:
+  - name: viralefy
+    orgId: 1
+    folder: 'Viralefy'
+    folderUid: viralefy
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

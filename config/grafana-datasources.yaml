@@ -1,0 +1,62 @@
+# Provisioning de datasources — copiado para /etc/grafana/provisioning/datasources/.
+# Grafana recarrega automaticamente quando o arquivo muda.
+#
+# Tudo loopback: Loki, Tempo e Prometheus rodam no mesmo host.
+apiVersion: 1
+
+datasources:
+  - name: Loki
+    type: loki
+    access: proxy
+    uid: viralefy-loki
+    url: http://127.0.0.1:3100
+    isDefault: false
+    editable: false
+    jsonData:
+      maxLines: 5000
+      # Permite saltar de log -> trace via trace_id (Tempo).
+      derivedFields:
+        - datasourceUid: viralefy-tempo
+          matcherRegex: '"trace_id":"([a-f0-9]+)"'
+          name: TraceID
+          url: '$${__value.raw}'
+
+  - name: Tempo
+    type: tempo
+    access: proxy
+    uid: viralefy-tempo
+    url: http://127.0.0.1:3200
+    isDefault: false
+    editable: false
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: viralefy-loki
+        spanStartTimeShift: '-5m'
+        spanEndTimeShift: '5m'
+        tags: [{ key: 'service.name', value: 'service' }]
+        filterByTraceID: true
+        filterBySpanID: false
+      tracesToMetrics:
+        datasourceUid: viralefy-prometheus
+      serviceMap:
+        datasourceUid: viralefy-prometheus
+      nodeGraph:
+        enabled: true
+      search:
+        hide: false
+      lokiSearch:
+        datasourceUid: viralefy-loki
+
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    uid: viralefy-prometheus
+    url: http://127.0.0.1:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      timeInterval: 15s
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: viralefy-tempo

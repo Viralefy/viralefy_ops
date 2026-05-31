@@ -12,6 +12,14 @@ WorkingDirectory=/viralefy/front
 EnvironmentFile=/etc/viralefy/.env
 Environment=NODE_ENV=production
 Environment=PATH=/usr/bin:/usr/local/bin
+# Observabilidade (OTel). Sem @vercel/otel instalado por enquanto, esses envs
+# servem só pra documentar — quando o pacote for adicionado, o exporter HTTP
+# vai automaticamente para o Tempo local. Métricas básicas de processo já
+# saem em /api/metrics.
+Environment=OTEL_SERVICE_NAME=viralefy-front
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+Environment=OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+Environment=OTEL_TRACES_EXPORTER=otlp
 ExecStart=/usr/bin/npm run start -- -p 3000 -H 127.0.0.1
 Restart=on-failure
 RestartSec=5

@@ -11,8 +11,8 @@ help:
 
 SCRIPTS := bin/viralefy-install bin/viralefy-update bin/viralefy-status bin/viralefy-logs bin/bootstrap.sh \
            installer/lib.sh installer/00-prereqs.sh installer/10-users.sh installer/20-postgres.sh \
-           installer/30-secrets.sh installer/40-clone.sh installer/50-build.sh installer/60-systemd.sh \
-           installer/70-start.sh
+           installer/30-secrets.sh installer/35-caddy.sh installer/40-clone.sh installer/50-build.sh \
+           installer/60-systemd.sh installer/70-start.sh installer/80-observability.sh
 
 lint:
 	@command -v shellcheck >/dev/null 2>&1 || { echo "instale shellcheck: apt install shellcheck"; exit 1; }

@@ -17,6 +17,7 @@ install_caddy_config() {
 		DOMAIN_FRONT=$DOMAIN_FRONT
 		DOMAIN_BACKOFFICE=$DOMAIN_BACKOFFICE
 		DOMAIN_API=$DOMAIN_API
+		DOMAIN_OBS=$DOMAIN_OBS
 		CADDY_EMAIL=$CADDY_EMAIL
 ENV
   chown root:caddy "$caddy_env"
@@ -42,5 +43,5 @@ EOF
 
   systemctl enable --now caddy >/dev/null
   systemctl reload caddy 2>/dev/null || systemctl restart caddy
-  info "Caddy servindo $DOMAIN_FRONT, $DOMAIN_BACKOFFICE, $DOMAIN_API"
+  info "Caddy servindo $DOMAIN_FRONT, $DOMAIN_BACKOFFICE, $DOMAIN_API, $DOMAIN_OBS"
 }

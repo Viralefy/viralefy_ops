@@ -2,7 +2,8 @@
 # Visão rápida do estado do stack: systemd, portas, healthchecks.
 set -uo pipefail
 
-services=(viralefy-api viralefy-front viralefy-backoffice caddy)
+services=(viralefy-api viralefy-front viralefy-backoffice caddy \
+          grafana-server loki tempo prometheus alloy node-exporter)
 
 bold() { printf '\e[1m%s\e[0m\n' "$*"; }
 ok()   { printf '  \e[32m✓\e[0m %s\n' "$*"; }
@@ -21,7 +22,7 @@ for s in "${services[@]}"; do
 done
 
 bold "Portas:"
-for p in 8080 3000 3001 80 443; do
+for p in 8080 3000 3001 80 443 3030 3100 3200 9090 9100 12345 4317 4318; do
   if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$p$"; then
     ok ":$p ouvindo"
   else
@@ -40,6 +41,19 @@ for u in \
   "API|http://127.0.0.1:8080/health" \
   "FRONT|http://127.0.0.1:3000" \
   "BACKOFFICE|http://127.0.0.1:3001/login"; do
+  name="${u%%|*}"; url="${u##*|}"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$url" || echo "—")"
+  if [[ "$code" == "200" ]]; then ok "$name $code"; else no "$name $code  $url"; fi
+done
+
+bold "Health (loopback — observabilidade):"
+for u in \
+  "Grafana|http://127.0.0.1:3030/api/health" \
+  "Loki|http://127.0.0.1:3100/ready" \
+  "Tempo|http://127.0.0.1:3200/ready" \
+  "Prometheus|http://127.0.0.1:9090/-/ready" \
+  "Alloy|http://127.0.0.1:12345/-/ready" \
+  "node_exporter|http://127.0.0.1:9100/metrics"; do
   name="${u%%|*}"; url="${u##*|}"
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$url" || echo "—")"
   if [[ "$code" == "200" ]]; then ok "$name $code"; else no "$name $code  $url"; fi

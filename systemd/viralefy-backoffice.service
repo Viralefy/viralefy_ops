@@ -12,6 +12,11 @@ WorkingDirectory=/viralefy/backoffice
 EnvironmentFile=/etc/viralefy/.env
 Environment=NODE_ENV=production
 Environment=PATH=/usr/bin:/usr/local/bin
+# Observabilidade (OTel) — ver comentário em viralefy-front.service.
+Environment=OTEL_SERVICE_NAME=viralefy-backoffice
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+Environment=OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+Environment=OTEL_TRACES_EXPORTER=otlp
 ExecStart=/usr/bin/npm run start -- -p 3001 -H 127.0.0.1
 Restart=on-failure
 RestartSec=5

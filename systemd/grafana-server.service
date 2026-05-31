@@ -1,0 +1,65 @@
+[Unit]
+Description=Grafana (Viralefy observability UI)
+Documentation=https://grafana.com/docs/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=grafana
+Group=grafana
+WorkingDirectory=/var/lib/grafana
+Environment=GF_PATHS_CONFIG=/etc/grafana/grafana.ini
+Environment=GF_PATHS_DATA=/var/lib/grafana
+Environment=GF_PATHS_HOME=/usr/share/grafana
+Environment=GF_PATHS_LOGS=/var/log/grafana
+Environment=GF_PATHS_PLUGINS=/var/lib/grafana/plugins
+Environment=GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+EnvironmentFile=-/etc/viralefy/.env
+ExecStart=/usr/sbin/grafana-server \
+    --config=/etc/grafana/grafana.ini \
+    --pidfile=/run/grafana/grafana-server.pid \
+    --packaging=deb \
+    cfg:default.paths.logs=/var/log/grafana \
+    cfg:default.paths.data=/var/lib/grafana \
+    cfg:default.paths.plugins=/var/lib/grafana/plugins \
+    cfg:default.paths.provisioning=/etc/grafana/provisioning
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+RuntimeDirectory=grafana
+RuntimeDirectoryMode=0750
+
+# Hardening (systemd.exec)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/grafana /var/log/grafana /run/grafana
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=grafana
+
+[Install]
+WantedBy=multi-user.target

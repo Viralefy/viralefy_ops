@@ -48,7 +48,12 @@ install_secrets() {
   : "${DOMAIN_FRONT:=localhost}"
   : "${DOMAIN_BACKOFFICE:=admin.localhost}"
   : "${DOMAIN_API:=api.localhost}"
+  : "${DOMAIN_OBS:=obs.localhost}"
   : "${CADDY_EMAIL:=}"
+
+  # Grafana admin password (persistente). Acesso em https://$DOMAIN_OBS.
+  : "${GRAFANA_ADMIN_PASSWORD:=$(gen_secret 32)}"
+  : "${OTEL_EXPORTER_OTLP_ENDPOINT:=http://127.0.0.1:4318}"
 
   # Derivados (recomputa sempre que domínios mudarem).
   local scheme
@@ -70,10 +75,11 @@ install_secrets() {
     fi
   fi
 
-  # Exporta para os módulos seguintes (PostgreSQL, build, Caddy).
+  # Exporta para os módulos seguintes (PostgreSQL, build, Caddy, Observabilidade).
   export DATABASE_PASSWORD JWT_SECRET RESEND_API_KEY \
          NEXT_PUBLIC_API_URL NEXT_PUBLIC_SITE_URL \
-         DOMAIN_FRONT DOMAIN_BACKOFFICE DOMAIN_API CADDY_EMAIL BIND_HOST
+         DOMAIN_FRONT DOMAIN_BACKOFFICE DOMAIN_API DOMAIN_OBS CADDY_EMAIL BIND_HOST \
+         GRAFANA_ADMIN_PASSWORD OTEL_EXPORTER_OTLP_ENDPOINT
 
   umask 027
   cat > "$ENV_FILE" <<-ENV
@@ -107,7 +113,13 @@ install_secrets() {
 		DOMAIN_FRONT=$DOMAIN_FRONT
 		DOMAIN_BACKOFFICE=$DOMAIN_BACKOFFICE
 		DOMAIN_API=$DOMAIN_API
+		DOMAIN_OBS=$DOMAIN_OBS
 		CADDY_EMAIL=$CADDY_EMAIL
+
+		# ---- Observabilidade (Grafana / OTel) ---- #
+		GRAFANA_ADMIN_PASSWORD=$GRAFANA_ADMIN_PASSWORD
+		OTEL_EXPORTER_OTLP_ENDPOINT=$OTEL_EXPORTER_OTLP_ENDPOINT
+		OTEL_SERVICE_NAME=viralefy-api
 ENV
   chown root:viralefy "$ENV_FILE"
   chmod 0640 "$ENV_FILE"

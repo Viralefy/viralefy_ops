@@ -12,6 +12,13 @@ mapper() {
     front)      echo "viralefy-front" ;;
     backoffice) echo "viralefy-backoffice" ;;
     caddy)      echo "caddy" ;;
+    grafana)    echo "grafana-server" ;;
+    loki)       echo "loki" ;;
+    tempo)      echo "tempo" ;;
+    prom|prometheus) echo "prometheus" ;;
+    alloy)      echo "alloy" ;;
+    node)       echo "node-exporter" ;;
+    obs)        echo "grafana-server loki tempo prometheus alloy node-exporter" ;;
     all|"")     echo "viralefy-api viralefy-front viralefy-backoffice caddy" ;;
     *) echo "viralefy-$1" ;;
   esac

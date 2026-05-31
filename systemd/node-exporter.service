@@ -1,0 +1,51 @@
+[Unit]
+Description=Prometheus node_exporter (Viralefy host metrics)
+Documentation=https://github.com/prometheus/node_exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=prometheus
+Group=prometheus
+ExecStart=/usr/bin/prometheus-node-exporter \
+    --web.listen-address=127.0.0.1:9100 \
+    --collector.systemd \
+    --collector.processes \
+    --no-collector.wifi \
+    --no-collector.btrfs \
+    --no-collector.nfs \
+    --no-collector.nfsd
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+# Hardening (systemd.exec) — node_exporter precisa ler /proc /sys, então não
+# usamos ProtectKernelTunables (impede leitura de /proc/sys) nem ProcSubset.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=node-exporter
+
+[Install]
+WantedBy=multi-user.target

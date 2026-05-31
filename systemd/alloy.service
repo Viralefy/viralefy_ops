@@ -1,34 +1,32 @@
 [Unit]
-Description=Viralefy API (Go)
-Documentation=https://github.com/Viralefy/viralefy_api
-After=network-online.target postgresql.service
+Description=Grafana Alloy (Viralefy log/metric/trace collector)
+Documentation=https://grafana.com/docs/alloy/
+After=network-online.target
 Wants=network-online.target
-Requires=postgresql.service
 
 [Service]
 Type=simple
-User=viralefy-api
-Group=viralefy
-WorkingDirectory=/viralefy/api
-EnvironmentFile=/etc/viralefy/.env
-# OTel — exporta traces pra Tempo local. Mesmo se o .env não declarar (envio
-# OTLP HTTP é opt-in via InitTracer), garantimos o default aqui.
-Environment=OTEL_SERVICE_NAME=viralefy-api
-Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
-Environment=OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-ExecStart=/viralefy/api/bin/viralefy-api
+User=alloy
+Group=alloy
+WorkingDirectory=/var/lib/alloy
+Environment=GOMAXPROCS=2
+ExecStart=/usr/bin/alloy run \
+    --server.http.listen-addr=127.0.0.1:12345 \
+    --storage.path=/var/lib/alloy \
+    /etc/alloy/config.alloy
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
 LimitNOFILE=65536
 
 # Hardening (systemd.exec)
+# Alloy precisa ler /var/log/journal — usamos SupplementaryGroups=systemd-journal.
+SupplementaryGroups=systemd-journal
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
-PrivateMounts=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
@@ -41,19 +39,17 @@ RestrictSUIDSGID=true
 RestrictRealtime=true
 RestrictNamespaces=true
 LockPersonality=true
-MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadWritePaths=/viralefy/api
+ReadWritePaths=/var/lib/alloy
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
-# Journald
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=viralefy-api
+SyslogIdentifier=alloy
 
 [Install]
 WantedBy=multi-user.target

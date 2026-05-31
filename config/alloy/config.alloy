@@ -1,0 +1,77 @@
+// Viralefy — Grafana Alloy collector.
+//
+// Lê o journald local, filtra os SyslogIdentifier viralefy-* + caddy, e empurra
+// pra Loki em 127.0.0.1:3100. Também expõe /metrics na 127.0.0.1:12345 pro
+// Prometheus se observar.
+//
+// Sintaxe River (HCL-like). Não usar variáveis fora deste arquivo — Alloy não
+// faz env expand sem `env()` explícito.
+
+logging {
+	level  = "warn"
+	format = "logfmt"
+}
+
+// ---------- Loki destination ---------- //
+
+loki.write "default" {
+	endpoint {
+		url = "http://127.0.0.1:3100/loki/api/v1/push"
+	}
+	external_labels = {
+		host    = "viralefy",
+		cluster = "viralefy",
+	}
+}
+
+// ---------- journald source ---------- //
+//
+// Lê tudo do journal. Filtramos por SyslogIdentifier no relabel; o que não
+// casa com a allowlist é descartado.
+
+loki.source.journal "system" {
+	max_age       = "12h"
+	path          = "/var/log/journal"
+	relabel_rules = loki.relabel.journal.rules
+	forward_to    = [loki.write.default.receiver]
+	labels        = {
+		job = "systemd-journal",
+	}
+}
+
+// ---------- Relabel: traz campos do journald p/ labels ---------- //
+
+loki.relabel "journal" {
+	forward_to = []
+
+	// SyslogIdentifier -> label service
+	rule {
+		source_labels = ["__journal__systemd_unit"]
+		target_label  = "unit"
+	}
+	rule {
+		source_labels = ["__journal_syslog_identifier"]
+		target_label  = "service"
+	}
+	rule {
+		source_labels = ["__journal_priority_keyword"]
+		target_label  = "level"
+	}
+	rule {
+		source_labels = ["__journal__hostname"]
+		target_label  = "host"
+	}
+
+	// Allowlist: só ficam logs que importam pra observabilidade do produto.
+	// Tudo o que não casa é dropado.
+	rule {
+		source_labels = ["service"]
+		regex         = "viralefy-api|viralefy-front|viralefy-backoffice|caddy|grafana|loki|tempo|prometheus|alloy"
+		action        = "keep"
+	}
+}
+
+// ---------- Self metrics ---------- //
+//
+// Alloy expõe /metrics em 127.0.0.1:12345 (porta default do componente HTTP).
+// Configurado via flag --server.http.listen-addr no systemd unit.

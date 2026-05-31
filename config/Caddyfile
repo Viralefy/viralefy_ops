@@ -67,6 +67,31 @@ www.{$DOMAIN_FRONT} {
 	}
 }
 
+# ---------------- Observability (Grafana) ---------------- #
+{$DOMAIN_OBS} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Cross-Origin-Opener-Policy "same-origin"
+		-Server
+		-X-Powered-By
+	}
+
+	# Grafana escuta em 127.0.0.1:3030 (3000 já é do viralefy-front).
+	reverse_proxy 127.0.0.1:3030 {
+		header_up X-Real-IP {http.request.remote.host}
+	}
+
+	log {
+		output stderr
+		format json
+	}
+}
+
 # ---------------- API ---------------- #
 {$DOMAIN_API} {
 	encode zstd gzip

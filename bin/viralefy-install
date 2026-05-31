@@ -40,6 +40,8 @@ source "$OPS_DIR/installer/50-build.sh"
 source "$OPS_DIR/installer/60-systemd.sh"
 # shellcheck source=../installer/70-start.sh
 source "$OPS_DIR/installer/70-start.sh"
+# shellcheck source=../installer/80-observability.sh
+source "$OPS_DIR/installer/80-observability.sh"
 
 main() {
   require_root
@@ -55,6 +57,7 @@ main() {
   install_systemd
   install_caddy_config
   install_start
+  install_observability
 
   echo
   info "Instalação concluída."
@@ -62,6 +65,7 @@ main() {
   echo "  - pacotes:     $(IFS=, ; echo "${PACKAGES[*]}") em $ROOT_DIR/"
   echo "  - serviços:    systemctl status viralefy-{api,front,backoffice} caddy"
   echo "  - URLs:        https://$DOMAIN_FRONT  ·  https://$DOMAIN_BACKOFFICE  ·  https://$DOMAIN_API"
+  echo "  - obs:         https://$DOMAIN_OBS  (admin / \$GRAFANA_ADMIN_PASSWORD em $ENV_FILE)"
   echo "  - atualizar:   sudo viralefy-update    (DESTRUTIVO)"
   echo "  - status:      viralefy-status"
 }

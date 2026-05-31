@@ -11,7 +11,7 @@ install_prereqs() {
   apt-get install -y -qq \
     git curl jq ca-certificates gnupg lsb-release \
     build-essential pkg-config \
-    sudo openssl \
+    sudo openssl unzip \
     debian-keyring debian-archive-keyring apt-transport-https >/dev/null
 
   install_go

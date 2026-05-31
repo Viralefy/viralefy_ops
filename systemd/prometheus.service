@@ -1,22 +1,23 @@
 [Unit]
-Description=Viralefy API (Go)
-Documentation=https://github.com/Viralefy/viralefy_api
-After=network-online.target postgresql.service
+Description=Prometheus (Viralefy metrics)
+Documentation=https://prometheus.io/docs/
+After=network-online.target
 Wants=network-online.target
-Requires=postgresql.service
 
 [Service]
 Type=simple
-User=viralefy-api
-Group=viralefy
-WorkingDirectory=/viralefy/api
-EnvironmentFile=/etc/viralefy/.env
-# OTel — exporta traces pra Tempo local. Mesmo se o .env não declarar (envio
-# OTLP HTTP é opt-in via InitTracer), garantimos o default aqui.
-Environment=OTEL_SERVICE_NAME=viralefy-api
-Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
-Environment=OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-ExecStart=/viralefy/api/bin/viralefy-api
+User=prometheus
+Group=prometheus
+WorkingDirectory=/var/lib/prometheus
+ExecStart=/usr/bin/prometheus \
+    --config.file=/etc/prometheus/prometheus.yml \
+    --storage.tsdb.path=/var/lib/prometheus \
+    --storage.tsdb.retention.time=15d \
+    --storage.tsdb.retention.size=8GB \
+    --web.listen-address=127.0.0.1:9090 \
+    --web.enable-lifecycle \
+    --enable-feature=remote-write-receiver \
+    --enable-feature=exemplar-storage
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
@@ -47,13 +48,12 @@ SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadWritePaths=/viralefy/api
+ReadWritePaths=/var/lib/prometheus
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
-# Journald
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=viralefy-api
+SyslogIdentifier=prometheus
 
 [Install]
 WantedBy=multi-user.target

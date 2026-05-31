@@ -1,0 +1,64 @@
+# Viralefy — Tempo single-binary, local storage, retention 72h.
+# Dados em /var/lib/tempo (sobrevive ao viralefy-update destrutivo).
+# Recebe traces via OTLP em 127.0.0.1:4317 (gRPC) e 127.0.0.1:4318 (HTTP).
+# Expõe API/query em 127.0.0.1:3200.
+
+stream_over_http_enabled: true
+
+server:
+  http_listen_address: 127.0.0.1
+  http_listen_port: 3200
+  grpc_listen_address: 127.0.0.1
+  grpc_listen_port: 9096
+  log_level: warn
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 127.0.0.1:4317
+        http:
+          endpoint: 127.0.0.1:4318
+
+ingester:
+  max_block_duration: 5m
+  trace_idle_period: 10s
+
+compactor:
+  compaction:
+    block_retention: 72h        # 3 dias de traces
+    compacted_block_retention: 1h
+
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+      cluster: viralefy
+  storage:
+    path: /var/lib/tempo/generator/wal
+    remote_write:
+      - url: http://127.0.0.1:9090/api/v1/write
+        send_exemplars: true
+  traces_storage:
+    path: /var/lib/tempo/generator/traces
+  processor:
+    span_metrics:
+      dimensions: [http.method, http.route, http.status_code, service.name]
+    service_graphs: {}
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/lib/tempo/wal
+    local:
+      path: /var/lib/tempo/blocks
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: [service-graphs, span-metrics]
+
+usage_report:
+  reporting_enabled: false
