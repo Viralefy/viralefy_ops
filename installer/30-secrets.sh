@@ -63,8 +63,14 @@ install_secrets() {
     scheme="https"
   fi
   : "${NEXT_PUBLIC_API_URL:=$scheme://$DOMAIN_API}"
-  : "${NEXT_PUBLIC_SITE_URL:=$scheme://$DOMAIN_FRONT}"
-  : "${CORS_ORIGINS:=$scheme://$DOMAIN_FRONT,$scheme://$DOMAIN_BACKOFFICE}"
+  # SITE_URL aponta pra www como canônico — apex viralefy.com redireciona
+  # 301 pra www. Hostnames sem ponto (localhost) ficam direto, sem www.
+  if [[ "$DOMAIN_FRONT" == *.*  ]]; then
+    : "${NEXT_PUBLIC_SITE_URL:=$scheme://www.$DOMAIN_FRONT}"
+  else
+    : "${NEXT_PUBLIC_SITE_URL:=$scheme://$DOMAIN_FRONT}"
+  fi
+  : "${CORS_ORIGINS:=$scheme://$DOMAIN_FRONT,$scheme://www.$DOMAIN_FRONT,$scheme://$DOMAIN_BACKOFFICE}"
 
   if [[ -z "${RESEND_API_KEY:-}" ]]; then
     if [[ -t 0 ]]; then
