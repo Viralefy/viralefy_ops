@@ -81,9 +81,17 @@ install_secrets() {
     fi
   fi
 
+  # Turnstile (anti-bot) e admin webhook (Slack/Discord). Vazios = bypass —
+  # ambos têm tratamento de no-op no código. Mantemos no template pra
+  # sobreviver à regeneração destrutiva do .env.
+  : "${NEXT_PUBLIC_TURNSTILE_SITE_KEY:=}"
+  : "${TURNSTILE_SECRET_KEY:=}"
+  : "${ADMIN_WEBHOOK_URL:=}"
+
   # Exporta para os módulos seguintes (PostgreSQL, build, Caddy, Observabilidade).
   export DATABASE_PASSWORD JWT_SECRET RESEND_API_KEY \
          NEXT_PUBLIC_API_URL NEXT_PUBLIC_SITE_URL \
+         NEXT_PUBLIC_TURNSTILE_SITE_KEY TURNSTILE_SECRET_KEY ADMIN_WEBHOOK_URL \
          DOMAIN_FRONT DOMAIN_BACKOFFICE DOMAIN_API DOMAIN_OBS CADDY_EMAIL BIND_HOST \
          GRAFANA_ADMIN_PASSWORD OTEL_EXPORTER_OTLP_ENDPOINT
 
@@ -114,6 +122,16 @@ install_secrets() {
 		# ---- Front / Backoffice (Next.js — usadas em build) ---- #
 		NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 		NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
+		NEXT_PUBLIC_TURNSTILE_SITE_KEY=$NEXT_PUBLIC_TURNSTILE_SITE_KEY
+
+		# ---- Cloudflare Turnstile (anti-bot) ---- #
+		# Site key é pública (front carrega via NEXT_PUBLIC_*); secret é
+		# server-only. Ambos vazios = bypass (HML).
+		TURNSTILE_SECRET_KEY=$TURNSTILE_SECRET_KEY
+
+		# ---- Admin webhook (Slack/Discord) ---- #
+		# Notificação quando ticket de high-touch abre. Vazio = no-op.
+		ADMIN_WEBHOOK_URL=$ADMIN_WEBHOOK_URL
 
 		# ---- Caddy (HTTP/HTTPS) ---- #
 		DOMAIN_FRONT=$DOMAIN_FRONT
