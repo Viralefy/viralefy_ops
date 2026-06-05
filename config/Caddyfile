@@ -36,9 +36,20 @@ www.{$DOMAIN_FRONT} {
 		Referrer-Policy "strict-origin-when-cross-origin"
 		Permissions-Policy "interest-cohort=(), browsing-topics=()"
 		Cross-Origin-Opener-Policy "same-origin"
+		# X-Robots-Tag explícito (default seria indexar tudo, mas Ahrefs flagga
+		# como "Ausente" quando não tem header). Sobrescreve com noindex
+		# nos paths privados via outros matches.
+		X-Robots-Tag "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
 		-Server
 		-X-Powered-By
 	}
+
+	# noindex pros paths privados via X-Robots-Tag (robots.txt já bloqueia,
+	# mas redundância dupla protege contra crawlers que ignoram robots.txt).
+	@private {
+		path /account /account/* /tickets /tickets/* /login /register /orders/* /api/*
+	}
+	header @private X-Robots-Tag "noindex, nofollow"
 
 	reverse_proxy 127.0.0.1:3000 {
 		header_up X-Real-IP {http.request.remote.host}
