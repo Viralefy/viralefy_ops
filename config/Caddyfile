@@ -12,6 +12,15 @@
 # ---------------- apex → www (canônico flipped) ---------------- #
 # A loja é canônica em www.viralefy.com. Apex viralefy.com redireciona 301
 # preservando path/query — bookmarks e backlinks históricos continuam vivos.
+#
+# IMPORTANTE: capturamos http:// e https:// explicitamente pra evitar a hop
+# intermediária do Caddy global handler (que faria http://apex → https://apex
+# antes do redir). Cadeia HTTP→HTTPS→www = 2 hops e Ahrefs flagga como
+# "redirect chain". Com os 2 blocos abaixo, http://apex → https://www em UM
+# único 301, e https://apex → https://www em UM único 301.
+http://{$DOMAIN_FRONT} {
+	redir https://www.{$DOMAIN_FRONT}{uri} 301
+}
 {$DOMAIN_FRONT} {
 	redir https://www.{$DOMAIN_FRONT}{uri} 301
 }
