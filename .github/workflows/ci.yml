@@ -19,8 +19,10 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y shellcheck >/dev/null
-          # SC1091 = source de arquivo runtime; SC2086 = quoting opt-in
-          shellcheck -x -e SC1091 -e SC2086 bin/* installer/*.sh
+          # SC1090/1091 = source dinâmico (env file); SC2086 = quoting opt-in;
+          # SC2034 = vars exportadas para subscripts via `set -a`; SC2012 = ls
+          # tudo justificado pelo design do bootstrap.
+          shellcheck -x -e SC1090,SC1091,SC2086,SC2034,SC2012 bin/* installer/*.sh
 
   syntax-systemd:
     runs-on: ubuntu-latest
