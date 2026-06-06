@@ -4,6 +4,8 @@
 install_start() {
   log "habilitando e subindo serviços"
   systemctl enable --now viralefy-api viralefy-front viralefy-backoffice
+  # Timer do backup do Postgres — diário 03:00 UTC. enable+now agenda imediato.
+  systemctl enable --now viralefy-backup.timer
   wait_healthy
 }
 

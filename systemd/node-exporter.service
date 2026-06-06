@@ -12,6 +12,8 @@ ExecStart=/usr/bin/prometheus-node-exporter \
     --web.listen-address=127.0.0.1:9100 \
     --collector.systemd \
     --collector.processes \
+    --collector.textfile \
+    --collector.textfile.directory=/var/lib/prometheus/node_exporter \
     --no-collector.wifi \
     --no-collector.btrfs \
     --no-collector.nfs \

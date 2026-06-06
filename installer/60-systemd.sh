@@ -11,9 +11,15 @@ install_systemd() {
     install -m 0644 -o root -g root "$src/$unit.service" "/etc/systemd/system/$unit.service"
   done
 
-  # Os CLIs (update/status/logs) ficam em /usr/local/sbin pra sobreviverem ao
-  # rm -rf de /viralefy/ops durante o update destrutivo.
-  for cmd in viralefy-update viralefy-status viralefy-logs; do
+  # Backup do Postgres: service + timer + diretório de saída.
+  for unit in viralefy-backup.service viralefy-backup.timer; do
+    install -m 0644 -o root -g root "$src/$unit" "/etc/systemd/system/$unit"
+  done
+  install -d -m 0700 -o root -g root /var/backups/viralefy
+
+  # Os CLIs (update/status/logs/backup) ficam em /usr/local/sbin pra
+  # sobreviverem ao rm -rf de /viralefy/ops durante o update destrutivo.
+  for cmd in viralefy-update viralefy-status viralefy-logs viralefy-backup; do
     install -m 0755 -o root -g root "$ops_dir/bin/$cmd" "/usr/local/sbin/$cmd"
   done
 

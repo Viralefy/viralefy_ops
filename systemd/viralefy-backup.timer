@@ -1,0 +1,14 @@
+[Unit]
+Description=Viralefy — disparador diário do backup do Postgres
+Documentation=https://github.com/Viralefy/viralefy_ops
+
+[Timer]
+# 03:00 UTC todo dia. Aleatório de até 30min pra distribuir carga se a
+# VPS estiver compartilhada com outros timers.
+OnCalendar=*-*-* 03:00:00 UTC
+RandomizedDelaySec=30min
+Persistent=true
+Unit=viralefy-backup.service
+
+[Install]
+WantedBy=timers.target
