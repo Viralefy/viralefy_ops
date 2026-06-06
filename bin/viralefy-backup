@@ -61,7 +61,7 @@ declare -A KEEP=()
 i=0
 for f in "${ALL[@]}"; do
   KEEP[$f]=1
-  ((i++))
+  ((++i))
   [[ $i -ge 7 ]] && break
 done
 
@@ -74,7 +74,7 @@ for f in "${ALL[@]}"; do
   dow=$(date -d "$d" +%u 2>/dev/null || echo "")
   if [[ "$dow" == "7" ]]; then
     KEEP[$f]=1
-    ((sundays_kept++))
+    ((++sundays_kept))
     [[ $sundays_kept -ge 4 ]] && break
   fi
 done
@@ -87,7 +87,7 @@ for f in "${ALL[@]}"; do
   dom="${d:6:2}"
   if [[ "$dom" == "01" ]]; then
     KEEP[$f]=1
-    ((firsts_kept++))
+    ((++firsts_kept))
     [[ $firsts_kept -ge 6 ]] && break
   fi
 done
@@ -96,7 +96,7 @@ deleted=0
 for f in "${ALL[@]}"; do
   if [[ -z "${KEEP[$f]:-}" ]]; then
     rm -f "$f"
-    ((deleted++))
+    ((++deleted))
   fi
 done
 echo "[backup] retenção: ${#KEEP[@]} mantidos, $deleted removidos"
