@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck installer + bin
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y shellcheck >/dev/null
+          # SC1091 = source de arquivo runtime; SC2086 = quoting opt-in
+          shellcheck -x -e SC1091 -e SC2086 bin/* installer/*.sh
+
+  syntax-systemd:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: systemd-analyze syntax
+        run: |
+          # systemd-analyze verify exige caminhos absolutos das ExecStart
+          # — válido só dentro do host de produção. Aqui só checamos parse
+          # do ini fazendo systemd-analyze cat-config emulation via grep
+          # básico das chaves obrigatórias.
+          for u in systemd/*.service systemd/*.timer; do
+            grep -q "^\[Unit\]" "$u" || { echo "FAIL $u missing [Unit]"; exit 1; }
+          done
+          echo "ok"
