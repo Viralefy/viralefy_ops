@@ -1,17 +1,30 @@
 #!/usr/bin/env bash
-# viralefy-update — atualização DESTRUTIVA do stack.
+# viralefy-update — deploy ZERO-DOWNTIME via staging-then-swap.
 #
-# Por especificação do projeto: rm -rf em /viralefy/<pkg> (incluindo ops) e
-# reconstrói do zero a partir do GitHub. Segredos em /etc/viralefy/.env e o
-# DB PostgreSQL ficam intocados.
+# Estratégia: build inteiro acontece em /viralefy.next/ enquanto os
+# serviços continuam rodando no /viralefy/ atual. Só na hora da troca
+# (uns ~5s) é que os serviços reiniciam.
 #
-# O script se copia para /tmp antes de apagar /viralefy/ops, pois é parte do
-# que será apagado. Sobrevive ao próprio rm -rf assim.
+# Fluxo:
+#   1. Clona todos os repos pra /viralefy.next/ (paralelo aos serviços live).
+#   2. Build da API + front + backoffice em /viralefy.next/.
+#   3. Atomic swap:
+#        systemctl stop {api,front,backoffice}    # ~1s
+#        mv /viralefy → /viralefy.prev             # instant (same FS)
+#        mv /viralefy.next → /viralefy             # instant
+#        systemctl start {api,front,backoffice}    # ~3s
+#   4. Healthcheck. Se falhar, rollback automatic (mv /viralefy.prev → /viralefy).
+#   5. Cleanup .prev em background.
+#
+# Para emergência (build quebrado, rebuild total): use viralefy-update --legacy
+# que faz o destrutivo antigo.
 
 set -euo pipefail
 IFS=$'\n\t'
 
 ROOT_DIR=/viralefy
+NEXT_DIR=/viralefy.next
+PREV_DIR=/viralefy.prev
 ENV_FILE=/etc/viralefy/.env
 ORG="${VIRALEFY_GH_ORG:-Viralefy}"
 REPO_BASE="${VIRALEFY_REPO_BASE:-https://github.com/$ORG}"
@@ -19,32 +32,137 @@ BRANCH="${VIRALEFY_BRANCH:-main}"
 
 [[ $EUID -eq 0 ]] || { echo "Precisa rodar como root."; exit 1; }
 
-echo "[1/5] Parando serviços..."
-systemctl stop viralefy-api viralefy-front viralefy-backoffice 2>/dev/null || true
+# Modo legacy: comportamento antigo destrutivo. Usado em emergência.
+if [[ "${1:-}" == "--legacy" ]]; then
+  echo "[legacy] modo destrutivo solicitado"
+  systemctl stop viralefy-api viralefy-front viralefy-backoffice 2>/dev/null || true
+  rm -rf "$ROOT_DIR/api" "$ROOT_DIR/front" "$ROOT_DIR/backoffice" "$ROOT_DIR/ops" "$ROOT_DIR/archive"
+  STAGE="$(mktemp -d /tmp/viralefy-ops.XXXXXX)"
+  trap 'rm -rf "$STAGE"' EXIT
+  git clone --depth 1 --branch "$BRANCH" "$REPO_BASE/viralefy_ops.git" "$STAGE" >/dev/null
+  [[ -f "$ENV_FILE" ]] && { set -a; source "$ENV_FILE"; set +a; }
+  exec "$STAGE/bin/viralefy-install"
+fi
 
-# Confirmação se rodando interativo e a flag --yes não veio.
+# Confirmação interativa
 if [[ -t 0 && "${1:-}" != "--yes" ]]; then
-  echo
-  echo "ATENÇÃO: vou apagar TUDO em $ROOT_DIR/ (api, front, backoffice, ops, archive)"
-  echo "         e reclonar de $REPO_BASE branch $BRANCH."
-  echo "         /etc/viralefy/.env e o banco PostgreSQL são preservados."
+  echo "Deploy zero-downtime: build em $NEXT_DIR, swap atômico."
+  echo "Downtime estimado: ~5s (stop + mv + start)."
   read -r -p "Continuar? [y/N] " ans
   [[ "$ans" == "y" || "$ans" == "Y" ]] || { echo "abortado."; exit 1; }
 fi
 
-echo "[2/5] Apagando /viralefy/* ..."
-rm -rf "$ROOT_DIR/api" "$ROOT_DIR/front" "$ROOT_DIR/backoffice" "$ROOT_DIR/ops" "$ROOT_DIR/archive"
+ts() { date -u +"%H:%M:%S"; }
+log() { echo "[$(ts)] $*"; }
 
-echo "[3/5] Clonando viralefy_ops para /tmp ..."
-STAGE="$(mktemp -d /tmp/viralefy-ops.XXXXXX)"
-trap 'rm -rf "$STAGE"' EXIT
-git clone --depth 1 --branch "$BRANCH" "$REPO_BASE/viralefy_ops.git" "$STAGE" >/dev/null
+log "limpando staging anterior"
+rm -rf "$NEXT_DIR" "$PREV_DIR"
+install -d -m 0755 -o root -g root "$NEXT_DIR"
 
-echo "[4/5] Carregando segredos de $ENV_FILE ..."
-if [[ -f "$ENV_FILE" ]]; then
-  # shellcheck disable=SC1090
-  set -a; source "$ENV_FILE"; set +a
+log "carregando segredos"
+[[ -f "$ENV_FILE" ]] || { echo ".env ausente em $ENV_FILE"; exit 1; }
+# shellcheck disable=SC1090
+set -a; source "$ENV_FILE"; set +a
+
+# ---------- Clones em paralelo ---------- #
+log "clonando 5 repos em paralelo pra $NEXT_DIR"
+clone_one() {
+  local repo="$1" pkg="$2" user="$3"
+  git clone --quiet --depth 1 --branch "$BRANCH" "$REPO_BASE/$repo.git" "$NEXT_DIR/$pkg"
+  chown -R "$user:viralefy" "$NEXT_DIR/$pkg"
+}
+clone_one viralefy_api       api        viralefy-api &
+clone_one viralefy_front     front      viralefy-front &
+clone_one viralefy_backoffice backoffice viralefy-backoffice &
+clone_one viralefy_ops       ops        root &
+clone_one viralefy_archive   archive    root &
+wait
+log "clones ok"
+
+# ---------- Builds em paralelo ---------- #
+log "buildando API (Go) + front + backoffice em paralelo"
+
+build_api() {
+  local d="$NEXT_DIR/api"
+  install -d -m 0755 -o viralefy-api -g viralefy "$d/bin"
+  sudo -u viralefy-api -H env PATH="/usr/local/go/bin:$PATH" \
+    bash -c "cd '$d' && go build -trimpath -ldflags='-s -w' -o bin/viralefy-api ./cmd/api"
+}
+
+build_node() {
+  local pkg="$1" user="viralefy-$1" d="$NEXT_DIR/$1"
+  # .env.local com NEXT_PUBLIC_* pro build-time
+  install -m 0640 -o "$user" -g viralefy /dev/null "$d/.env.local"
+  { grep -E '^NEXT_PUBLIC_' "$ENV_FILE" || true; } > "$d/.env.local"
+  chown "$user:viralefy" "$d/.env.local"
+  sudo -u "$user" -H bash -c "cd '$d' && npm ci --no-audit --no-fund --silent && npm run build --silent"
+}
+
+build_api > /tmp/build-api.log 2>&1 &
+PID_API=$!
+build_node front > /tmp/build-front.log 2>&1 &
+PID_FRONT=$!
+build_node backoffice > /tmp/build-backoffice.log 2>&1 &
+PID_BACK=$!
+
+# Espera + checa exit codes (paralelismo seguro)
+FAIL=0
+wait $PID_API || { echo "FALHA build API"; tail -30 /tmp/build-api.log; FAIL=1; }
+wait $PID_FRONT || { echo "FALHA build front"; tail -30 /tmp/build-front.log; FAIL=1; }
+wait $PID_BACK || { echo "FALHA build backoffice"; tail -30 /tmp/build-backoffice.log; FAIL=1; }
+
+if [[ $FAIL -eq 1 ]]; then
+  echo "Build falhou. /viralefy/ atual intocado. Staging em $NEXT_DIR."
+  exit 1
 fi
 
-echo "[5/5] Executando viralefy-install a partir de $STAGE ..."
-exec "$STAGE/bin/viralefy-install"
+log "builds ok — preparando swap"
+
+# ---------- ATOMIC SWAP (downtime aqui) ---------- #
+log "swap: stop → mv → start"
+
+systemctl stop viralefy-api viralefy-front viralefy-backoffice 2>/dev/null || true
+
+# Salva ops anterior pra rollback caso healthcheck falhe.
+if [[ -d $ROOT_DIR ]]; then
+  mv "$ROOT_DIR" "$PREV_DIR"
+fi
+mv "$NEXT_DIR" "$ROOT_DIR"
+
+# Re-instala systemd units (caso ops tenha mudado) — idempotente.
+"$ROOT_DIR/ops/installer/60-systemd.sh" >/dev/null 2>&1 || \
+  bash "$ROOT_DIR/ops/installer/60-systemd.sh" >/dev/null 2>&1 || true
+systemctl daemon-reload
+
+systemctl start viralefy-api viralefy-front viralefy-backoffice
+
+# ---------- Healthcheck + rollback ---------- #
+log "aguardando healthcheck (max 30s)"
+HEALTHY=0
+for i in $(seq 1 30); do
+  if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1 \
+     && curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1; then
+    HEALTHY=1
+    break
+  fi
+  sleep 1
+done
+
+if [[ $HEALTHY -eq 0 ]]; then
+  echo "❌ healthcheck falhou — fazendo rollback"
+  systemctl stop viralefy-api viralefy-front viralefy-backoffice
+  rm -rf "$ROOT_DIR"
+  mv "$PREV_DIR" "$ROOT_DIR"
+  systemctl daemon-reload
+  systemctl start viralefy-api viralefy-front viralefy-backoffice
+  echo "rollback completo. Logs do build em /tmp/build-*.log."
+  exit 1
+fi
+
+log "deploy ok ✓"
+
+# Cleanup em background, não bloqueia
+(rm -rf "$PREV_DIR" 2>/dev/null) &
+
+# Obs stack só roda se invocado explicitamente — não toca em cada deploy.
+echo "[ok] Stack zero-downtime. Próximo deploy: mesmo comando."
