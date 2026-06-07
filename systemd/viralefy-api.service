@@ -47,7 +47,7 @@ SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadWritePaths=/viralefy/api
+ReadWritePaths=/viralefy/api /etc/viralefy
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 # Journald

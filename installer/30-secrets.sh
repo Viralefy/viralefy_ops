@@ -15,7 +15,10 @@
 install_secrets() {
   log "configurando segredos em $ENV_FILE"
 
-  install -d -m 0750 -o root -g viralefy "$ENV_DIR"
+  # 0770 (em vez de 0750) permite ao viralefy-api criar
+  # /etc/viralefy/jwt-rs256.pem via jwtkeys.LoadOrGenerate no primeiro boot
+  # após a migração HS256→RS256. .env continua mode 0640 (root-owned).
+  install -d -m 0770 -o root -g viralefy "$ENV_DIR"
 
   # Carrega valores existentes (sem expor no shell — apenas se vai preservar).
   if [[ -f "$ENV_FILE" ]]; then
