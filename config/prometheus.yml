@@ -14,6 +14,9 @@ global:
 # Tempo metrics-generator faz remote_write pra cá; aceita exemplars.
 # (Habilitado via flag --enable-feature=remote-write-receiver no systemd unit.)
 
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
   - job_name: prometheus
     static_configs:

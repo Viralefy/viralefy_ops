@@ -147,6 +147,7 @@ install_obs_configs() {
   install -m 0644 -o root -g loki       "$cfg/loki.yaml"             /etc/loki/loki.yaml
   install -m 0644 -o root -g tempo      "$cfg/tempo.yaml"            /etc/tempo/tempo.yaml
   install -m 0644 -o root -g prometheus "$cfg/prometheus.yml"        /etc/prometheus/prometheus.yml
+  install -m 0644 -o root -g prometheus "$cfg/alerts.yml"            /etc/prometheus/alerts.yml
   install -m 0644 -o root -g alloy      "$cfg/alloy/config.alloy"    /etc/alloy/config.alloy
 
   info "configs de observabilidade em /etc/{grafana,loki,tempo,prometheus,alloy}"

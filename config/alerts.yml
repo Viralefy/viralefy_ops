@@ -1,0 +1,127 @@
+# Viralefy — Prometheus alert rules.
+# Carregado via rule_files em prometheus.yml.
+# Rotas pra Grafana Alerting (provisionado em /etc/grafana/provisioning/alerting/).
+
+groups:
+  - name: viralefy_uptime
+    interval: 30s
+    rules:
+      - alert: ApiDown
+        expr: up{job="viralefy-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Viralefy API está fora ({{ $labels.instance }})"
+          description: "Job viralefy-api retornando up=0 há > 2min. Checkout não está funcionando."
+
+      - alert: FrontDown
+        expr: probe_http_status_code{job="blackbox", instance=~".*viralefy.com/?"} != 200
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Storefront offline ou retornando não-200"
+          description: "{{ $labels.instance }} status={{ $value }}"
+
+  - name: viralefy_backup
+    interval: 1m
+    rules:
+      - alert: BackupStale
+        expr: time() - viralefy_backup_last_success_timestamp > 36 * 3600
+        for: 10m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Postgres backup atrasou (> 36h sem sucesso)"
+          description: "Último dump em {{ $value | humanizeTimestamp }}. Diário é alvo; 36h dá uma execução perdida + margem."
+
+      - alert: BackupTooSmall
+        expr: viralefy_backup_last_size_bytes < 1024
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dump de backup suspeito (< 1KB)"
+          description: "Tamanho {{ $value | humanize }} — possivelmente vazio ou corrompido."
+
+  - name: viralefy_data_invariants
+    interval: 1m
+    rules:
+      - alert: PlanPriceDriftHigh
+        expr: sum by (currency_code) (viralefy_plan_price_drift_rows) > 5
+        for: 30m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Drift em plan_prices > 5 rows pra moeda {{ $labels.currency_code }}"
+          description: "PlanPriceDriftCron detectou {{ $value }} linhas fora da fórmula USD * rate. Veja application/plan_price_drift_cron.go."
+
+  - name: viralefy_payments
+    interval: 1m
+    rules:
+      - alert: GatewayWebhookFailures
+        expr: rate(gateway_callbacks_total{status!="confirmed"}[10m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: payments
+        annotations:
+          summary: "Webhook de gateway {{ $labels.provider }} falhando ({{ $labels.status }})"
+          description: "Taxa de eventos não-confirmed > 0.1/s. Pode ser provider down, assinatura inválida ou ConfirmByExternalRef falhando."
+
+      - alert: NoGatewayConfirmedRecently
+        expr: increase(gateway_callbacks_total{status="confirmed"}[1h]) == 0 and on() hour() >= 8 and hour() <= 23
+        for: 2h
+        labels:
+          severity: warning
+          team: payments
+        annotations:
+          summary: "Nenhum pagamento confirmado em 1h (horário comercial)"
+          description: "Ou tráfego está zero ou pagamento está quebrado. Checar logs do API + webhook do gateway."
+
+  - name: viralefy_security
+    interval: 30s
+    rules:
+      - alert: HttpHigh5xx
+        expr: sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Taxa de 5xx > 5% (5min)"
+          description: "Algo quebrou em massa. Checar Sentry + logs."
+
+      - alert: AuthBruteforce
+        expr: sum(rate(http_requests_total{path=~"/v1/auth.*", status="429"}[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Rate-limit de login disparando ({{ $value }}/s 429)"
+          description: "Tentativa de brute-force ou bot na auth."
+
+  - name: viralefy_database
+    interval: 1m
+    rules:
+      - alert: PostgresDown
+        expr: up{job="postgres-exporter"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Postgres exporter caiu (ou Postgres caiu)"
+
+      - alert: DbQuerySlow
+        expr: histogram_quantile(0.95, sum by (le, query_type) (rate(db_query_duration_seconds_bucket[5m]))) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P95 de query {{ $labels.query_type }} > 500ms"
