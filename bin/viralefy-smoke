@@ -58,9 +58,10 @@ done
 note "endpoint público /v1/plans"
 code="$(http_code GET "http://$API_HOST/v1/plans")"
 if [[ "$code" == "200" ]]; then
-  # Verifica que é JSON array (catálogo não-vazio é overkill — POC pode ter 0)
-  if head -c 1 "$TMPBODY" | grep -q '^\[' \
-     || grep -q '"plans"' "$TMPBODY" 2>/dev/null; then
+  # Verifica que é JSON. API envelopa em {"data": ...} desde Fase 4.
+  # Aceita também array raw (compat legado).
+  first_char="$(head -c 1 "$TMPBODY")"
+  if [[ "$first_char" == "{" || "$first_char" == "[" ]]; then
     ok "/v1/plans → 200 + JSON"
   else
     bad "/v1/plans → 200 mas corpo não parece JSON ($(head -c 80 "$TMPBODY"))"
