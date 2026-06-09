@@ -123,6 +123,32 @@ www.{$DOMAIN_FRONT} {
 	# /health e /ready continuam públicos (necessários p/ load balancers).
 	# CORS é responsabilidade da API (CORS_ORIGINS em .env).
 
+	# ---- Webhooks de pagamento → viralefy_payments (127.0.0.1:8081) ---- #
+	# Stripe/Heleket/Woovi entregam aqui via internet; o microservice
+	# valida assinatura + idempotency e chama o callback interno na API.
+	# handle_path remove o prefixo /v1/webhooks/<provider> antes do upstream,
+	# então payments expõe /internal/webhooks/stripe etc. casando o que
+	# sobra no path.
+	handle_path /v1/webhooks/stripe* {
+		reverse_proxy 127.0.0.1:8081 {
+			header_up X-Real-IP {http.request.remote.host}
+			header_up X-Forwarded-Webhook "stripe"
+		}
+	}
+	handle_path /v1/webhooks/heleket* {
+		reverse_proxy 127.0.0.1:8081 {
+			header_up X-Real-IP {http.request.remote.host}
+			header_up X-Forwarded-Webhook "heleket"
+		}
+	}
+	handle_path /v1/webhooks/woovi* {
+		reverse_proxy 127.0.0.1:8081 {
+			header_up X-Real-IP {http.request.remote.host}
+			header_up X-Forwarded-Webhook "woovi"
+		}
+	}
+
+	# Default — tudo que não bateu nos handle_path acima vai pro monolito.
 	reverse_proxy 127.0.0.1:8080 {
 		header_up X-Real-IP {http.request.remote.host}
 	}

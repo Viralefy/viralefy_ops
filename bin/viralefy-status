@@ -2,7 +2,8 @@
 # Visão rápida do estado do stack: systemd, portas, healthchecks.
 set -uo pipefail
 
-services=(viralefy-api viralefy-front viralefy-backoffice caddy \
+services=(viralefy-api viralefy-payments viralefy-sender \
+          viralefy-front viralefy-backoffice caddy \
           grafana-server loki tempo prometheus alloy node-exporter)
 
 bold() { printf '\e[1m%s\e[0m\n' "$*"; }
@@ -22,7 +23,7 @@ for s in "${services[@]}"; do
 done
 
 bold "Portas:"
-for p in 8080 3000 3001 80 443 3030 3100 3200 9090 9100 12345 4317 4318; do
+for p in 8080 8081 8082 3000 3001 80 443 3030 3100 3200 9090 9100 12345 4317 4318; do
   if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$p$"; then
     ok ":$p ouvindo"
   else
@@ -44,6 +45,25 @@ for u in \
   name="${u%%|*}"; url="${u##*|}"
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$url" || echo "—")"
   if [[ "$code" == "200" ]]; then ok "$name $code"; else no "$name $code  $url"; fi
+done
+
+bold "Microservices (loopback-only):"
+# Cada microservice expõe systemd is-active + /internal/health. Esses
+# endpoints só respondem em 127.0.0.1 — Caddy não os encaminha (exceto
+# /v1/webhooks/* → payments). Falha aqui = api orfão; checar logs.
+ms_port_payments="${PAYMENTS_PORT:-8081}"
+ms_port_sender="${SENDER_PORT:-8082}"
+for u in \
+  "payments|$ms_port_payments" \
+  "sender|$ms_port_sender"; do
+  name="${u%%|*}"; port="${u##*|}"
+  state="$(systemctl is-active "viralefy-$name" 2>/dev/null || true)"
+  if [[ "$state" == "active" ]]; then ok "viralefy-$name systemd active"
+  else no "viralefy-$name systemd $state"; fi
+  url="http://127.0.0.1:$port/internal/health"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$url" || echo "—")"
+  if [[ "$code" == "200" ]]; then ok "viralefy-$name health $code  $url"
+  else no "viralefy-$name health $code  $url"; fi
 done
 
 bold "Health (loopback — observabilidade):"

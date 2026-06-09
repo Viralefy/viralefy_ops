@@ -1,0 +1,62 @@
+[Unit]
+Description=Viralefy Payments microservice (Go) — loopback only
+Documentation=https://github.com/Viralefy/viralefy_payments
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=viralefy-payments
+Group=viralefy
+WorkingDirectory=/viralefy/payments
+EnvironmentFile=/etc/viralefy/.env
+# OTel — mesma stack do monolito, tag por service.
+Environment=OTEL_SERVICE_NAME=viralefy-payments
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+Environment=OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+ExecStart=/usr/local/sbin/viralefy-payments
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+# Hardening (systemd.exec) — espelha viralefy-api.service.
+# ProtectSystem=full conforme spec da task (em vez de strict do api) pra
+# permitir leitura de /usr e /boot e ainda assim proteger /etc e /home.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateMounts=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/viralefy/payments /etc/viralefy
+# Loopback-only: o serviço bind em 127.0.0.1; AF_UNIX pra journald, AF_INET6
+# pra ::1. Caddy reverse-proxia /v1/webhooks/{stripe,heleket,woovi}.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=viralefy-payments
+
+[Install]
+WantedBy=multi-user.target

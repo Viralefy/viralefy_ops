@@ -7,7 +7,7 @@ install_systemd() {
   local src="$ops_dir/systemd"
 
   install -d -m 0755 -o root -g root /etc/systemd/system
-  for unit in viralefy-api viralefy-front viralefy-backoffice; do
+  for unit in viralefy-api viralefy-front viralefy-backoffice viralefy-payments viralefy-sender; do
     install -m 0644 -o root -g root "$src/$unit.service" "/etc/systemd/system/$unit.service"
   done
 

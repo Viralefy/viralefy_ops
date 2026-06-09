@@ -35,8 +35,8 @@ BRANCH="${VIRALEFY_BRANCH:-main}"
 # Modo legacy: comportamento antigo destrutivo. Usado em emergência.
 if [[ "${1:-}" == "--legacy" ]]; then
   echo "[legacy] modo destrutivo solicitado"
-  systemctl stop viralefy-api viralefy-front viralefy-backoffice 2>/dev/null || true
-  rm -rf "$ROOT_DIR/api" "$ROOT_DIR/front" "$ROOT_DIR/backoffice" "$ROOT_DIR/ops" "$ROOT_DIR/archive"
+  systemctl stop viralefy-api viralefy-payments viralefy-sender viralefy-front viralefy-backoffice 2>/dev/null || true
+  rm -rf "$ROOT_DIR/api" "$ROOT_DIR/payments" "$ROOT_DIR/sender" "$ROOT_DIR/front" "$ROOT_DIR/backoffice" "$ROOT_DIR/ops" "$ROOT_DIR/archive"
   STAGE="$(mktemp -d /tmp/viralefy-ops.XXXXXX)"
   trap 'rm -rf "$STAGE"' EXIT
   git clone --depth 1 --branch "$BRANCH" "$REPO_BASE/viralefy_ops.git" "$STAGE" >/dev/null
@@ -65,28 +65,43 @@ log "carregando segredos"
 set -a; source "$ENV_FILE"; set +a
 
 # ---------- Clones em paralelo ---------- #
-log "clonando 5 repos em paralelo pra $NEXT_DIR"
+# 7 repos: api, front, backoffice, payments, sender, ops, archive.
+log "clonando 7 repos em paralelo pra $NEXT_DIR"
 clone_one() {
   local repo="$1" pkg="$2" user="$3"
   git clone --quiet --depth 1 --branch "$BRANCH" "$REPO_BASE/$repo.git" "$NEXT_DIR/$pkg"
   chown -R "$user:viralefy" "$NEXT_DIR/$pkg"
 }
-clone_one viralefy_api       api        viralefy-api &
-clone_one viralefy_front     front      viralefy-front &
+clone_one viralefy_api        api        viralefy-api &
+clone_one viralefy_payments   payments   viralefy-payments &
+clone_one viralefy_sender     sender     viralefy-sender &
+clone_one viralefy_front      front      viralefy-front &
 clone_one viralefy_backoffice backoffice viralefy-backoffice &
-clone_one viralefy_ops       ops        root &
-clone_one viralefy_archive   archive    root &
+clone_one viralefy_ops        ops        root &
+clone_one viralefy_archive    archive    root &
 wait
 log "clones ok"
 
 # ---------- Builds em paralelo ---------- #
-log "buildando API (Go) + front + backoffice em paralelo"
+log "buildando API + payments + sender (Go) + front + backoffice em paralelo"
 
 build_api() {
   local d="$NEXT_DIR/api"
   install -d -m 0755 -o viralefy-api -g viralefy "$d/bin"
   sudo -u viralefy-api -H env PATH="/usr/local/go/bin:$PATH" \
     bash -c "cd '$d' && go build -trimpath -ldflags='-s -w' -o bin/viralefy-api ./cmd/api"
+}
+
+# Build genérico Go pros microservices (payments, sender). Mesmo pattern
+# do build_api; o binário fica em /viralefy.next/<pkg>/bin/ e será copiado
+# pra /usr/local/sbin/ pelo 60-systemd.sh durante o swap (o ExecStart dos
+# units aponta lá).
+build_go_svc() {
+  local pkg="$1" cmd_path="$2"
+  local d="$NEXT_DIR/$pkg" user="viralefy-$pkg" bin="viralefy-$pkg"
+  install -d -m 0755 -o "$user" -g viralefy "$d/bin"
+  sudo -u "$user" -H env PATH="/usr/local/go/bin:$PATH" \
+    bash -c "cd '$d' && go build -trimpath -ldflags='-s -w' -o bin/$bin ./$cmd_path"
 }
 
 build_node() {
@@ -100,6 +115,10 @@ build_node() {
 
 build_api > /tmp/build-api.log 2>&1 &
 PID_API=$!
+build_go_svc payments cmd/payments > /tmp/build-payments.log 2>&1 &
+PID_PAY=$!
+build_go_svc sender cmd/sender > /tmp/build-sender.log 2>&1 &
+PID_SND=$!
 build_node front > /tmp/build-front.log 2>&1 &
 PID_FRONT=$!
 build_node backoffice > /tmp/build-backoffice.log 2>&1 &
@@ -108,6 +127,8 @@ PID_BACK=$!
 # Espera + checa exit codes (paralelismo seguro)
 FAIL=0
 wait $PID_API || { echo "FALHA build API"; tail -30 /tmp/build-api.log; FAIL=1; }
+wait $PID_PAY || { echo "FALHA build payments"; tail -30 /tmp/build-payments.log; FAIL=1; }
+wait $PID_SND || { echo "FALHA build sender"; tail -30 /tmp/build-sender.log; FAIL=1; }
 wait $PID_FRONT || { echo "FALHA build front"; tail -30 /tmp/build-front.log; FAIL=1; }
 wait $PID_BACK || { echo "FALHA build backoffice"; tail -30 /tmp/build-backoffice.log; FAIL=1; }
 
@@ -121,7 +142,9 @@ log "builds ok — preparando swap"
 # ---------- ATOMIC SWAP (downtime aqui) ---------- #
 log "swap: stop → mv → start"
 
-systemctl stop viralefy-api viralefy-front viralefy-backoffice 2>/dev/null || true
+# Ordem de stop: api primeiro (depende dos microservices), depois os deps.
+systemctl stop viralefy-api viralefy-front viralefy-backoffice \
+               viralefy-payments viralefy-sender 2>/dev/null || true
 
 # Salva ops anterior pra rollback caso healthcheck falhe.
 if [[ -d $ROOT_DIR ]]; then
@@ -129,18 +152,31 @@ if [[ -d $ROOT_DIR ]]; then
 fi
 mv "$NEXT_DIR" "$ROOT_DIR"
 
+# Copia binários dos microservices pra /usr/local/sbin (ExecStart dos units
+# aponta lá). API tem ExecStart em /viralefy/api/bin/viralefy-api (in-place).
+for pkg in payments sender; do
+  if [[ -x "$ROOT_DIR/$pkg/bin/viralefy-$pkg" ]]; then
+    install -m 0755 -o root -g root \
+      "$ROOT_DIR/$pkg/bin/viralefy-$pkg" "/usr/local/sbin/viralefy-$pkg"
+  fi
+done
+
 # Re-instala systemd units (caso ops tenha mudado) — idempotente.
 "$ROOT_DIR/ops/installer/60-systemd.sh" >/dev/null 2>&1 || \
   bash "$ROOT_DIR/ops/installer/60-systemd.sh" >/dev/null 2>&1 || true
 systemctl daemon-reload
 
+# Microservices primeiro (deps do api).
+systemctl start viralefy-payments viralefy-sender
 systemctl start viralefy-api viralefy-front viralefy-backoffice
 
 # ---------- Healthcheck + rollback ---------- #
 log "aguardando healthcheck (max 30s)"
 HEALTHY=0
 for i in $(seq 1 30); do
-  if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1 \
+  if curl -fsS http://127.0.0.1:8081/internal/health >/dev/null 2>&1 \
+     && curl -fsS http://127.0.0.1:8082/internal/health >/dev/null 2>&1 \
+     && curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1 \
      && curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1; then
     HEALTHY=1
     break
@@ -149,11 +185,20 @@ for i in $(seq 1 30); do
 done
 
 if [[ $HEALTHY -eq 0 ]]; then
-  echo "❌ healthcheck falhou — fazendo rollback"
-  systemctl stop viralefy-api viralefy-front viralefy-backoffice
+  echo "healthcheck falhou — fazendo rollback"
+  systemctl stop viralefy-api viralefy-front viralefy-backoffice \
+                 viralefy-payments viralefy-sender
   rm -rf "$ROOT_DIR"
   mv "$PREV_DIR" "$ROOT_DIR"
+  # Restaura binários antigos dos microservices se existirem.
+  for pkg in payments sender; do
+    if [[ -x "$ROOT_DIR/$pkg/bin/viralefy-$pkg" ]]; then
+      install -m 0755 -o root -g root \
+        "$ROOT_DIR/$pkg/bin/viralefy-$pkg" "/usr/local/sbin/viralefy-$pkg"
+    fi
+  done
   systemctl daemon-reload
+  systemctl start viralefy-payments viralefy-sender
   systemctl start viralefy-api viralefy-front viralefy-backoffice
   echo "rollback completo. Logs do build em /tmp/build-*.log."
   exit 1

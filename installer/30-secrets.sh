@@ -35,6 +35,24 @@ install_secrets() {
   # Hex 64 chars. Vazio = 2FA disabled. Trocar essa key invalida TODOS os
   # enrollments existentes (re-enroll obrigatório) — não rotacionar.
   : "${TWOFA_ENCRYPTION_KEY:=$(openssl rand -hex 32)}"
+
+  # ---- Microservices (loopback) ---- #
+  # Token compartilhado entre viralefy_api, viralefy_payments e viralefy_sender
+  # — header X-Internal-Token em cada request inter-service. Loopback-only é a
+  # primeira barreira; o token é defense-in-depth contra processos co-locados.
+  # 32 bytes hex (64 chars). Rotacionar exige restart sincronizado dos 3 services.
+  : "${INTERNAL_SHARED_SECRET:=$(openssl rand -hex 32)}"
+  : "${PAYMENTS_PORT:=8081}"
+  : "${PAYMENTS_BIND_HOST:=127.0.0.1}"
+  : "${PAYMENTS_INTERNAL_URL:=http://${PAYMENTS_BIND_HOST}:${PAYMENTS_PORT}}"
+  : "${SENDER_PORT:=8082}"
+  : "${SENDER_BIND_HOST:=127.0.0.1}"
+  : "${SENDER_INTERNAL_URL:=http://${SENDER_BIND_HOST}:${SENDER_PORT}}"
+
+  # ---- Telegram bot (opcional) ---- #
+  # Vazio = canal Telegram desabilitado (sender vira no-op nesse channel).
+  : "${TELEGRAM_BOT_TOKEN:=}"
+  : "${TELEGRAM_ADMIN_CHAT_ID:=}"
   : "${DATABASE_URL:=postgres://viralefy:${DATABASE_PASSWORD}@localhost:5432/viralefy?sslmode=disable}"
 
   : "${EMAIL_PROVIDER:=resend}"
@@ -101,7 +119,11 @@ install_secrets() {
          NEXT_PUBLIC_TURNSTILE_SITE_KEY TURNSTILE_SECRET_KEY ADMIN_WEBHOOK_URL \
          DOMAIN_FRONT DOMAIN_BACKOFFICE DOMAIN_API DOMAIN_OBS CADDY_EMAIL BIND_HOST \
          GRAFANA_ADMIN_PASSWORD OTEL_EXPORTER_OTLP_ENDPOINT \
-         TWOFA_ENCRYPTION_KEY
+         TWOFA_ENCRYPTION_KEY \
+         INTERNAL_SHARED_SECRET \
+         PAYMENTS_PORT PAYMENTS_BIND_HOST PAYMENTS_INTERNAL_URL \
+         SENDER_PORT SENDER_BIND_HOST SENDER_INTERNAL_URL \
+         TELEGRAM_BOT_TOKEN TELEGRAM_ADMIN_CHAT_ID
 
   umask 027
   cat > "$ENV_FILE" <<-ENV
@@ -148,6 +170,21 @@ install_secrets() {
 		DOMAIN_API=$DOMAIN_API
 		DOMAIN_OBS=$DOMAIN_OBS
 		CADDY_EMAIL=$CADDY_EMAIL
+
+		# ---- Microservices (loopback-only) ---- #
+		# Loopback HTTP entre viralefy_api ↔ viralefy_payments ↔ viralefy_sender.
+		# Caddy reverse-proxia /v1/webhooks/{stripe,heleket,woovi} → payments.
+		PAYMENTS_PORT=$PAYMENTS_PORT
+		PAYMENTS_BIND_HOST=$PAYMENTS_BIND_HOST
+		PAYMENTS_INTERNAL_URL=$PAYMENTS_INTERNAL_URL
+		SENDER_PORT=$SENDER_PORT
+		SENDER_BIND_HOST=$SENDER_BIND_HOST
+		SENDER_INTERNAL_URL=$SENDER_INTERNAL_URL
+		INTERNAL_SHARED_SECRET=$INTERNAL_SHARED_SECRET
+
+		# ---- Telegram bot (opcional, sender) ---- #
+		TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN
+		TELEGRAM_ADMIN_CHAT_ID=$TELEGRAM_ADMIN_CHAT_ID
 
 		# ---- Observabilidade (Grafana / OTel) ---- #
 		GRAFANA_ADMIN_PASSWORD=$GRAFANA_ADMIN_PASSWORD

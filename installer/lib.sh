@@ -17,13 +17,15 @@ REPO_BASE="${VIRALEFY_REPO_BASE:-https://github.com/$ORG}"
 BRANCH="${VIRALEFY_BRANCH:-main}"
 
 # Pacotes desplegados (cada um vira /viralefy/<pkg> e um usuário systemd).
-PACKAGES=(api front backoffice)
+PACKAGES=(api front backoffice payments sender)
 
 # Mapeamento package -> repo (basename). archive também é clonado mas não roda.
 declare -A REPO_OF=(
   [api]="viralefy_api"
   [front]="viralefy_front"
   [backoffice]="viralefy_backoffice"
+  [payments]="viralefy_payments"
+  [sender]="viralefy_sender"
   [archive]="viralefy_archive"
   [ops]="viralefy_ops"
 )
