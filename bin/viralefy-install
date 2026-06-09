@@ -42,6 +42,8 @@ source "$OPS_DIR/installer/60-systemd.sh"
 source "$OPS_DIR/installer/70-start.sh"
 # shellcheck source=../installer/80-observability.sh
 source "$OPS_DIR/installer/80-observability.sh"
+# shellcheck source=../installer/85-storage.sh
+source "$OPS_DIR/installer/85-storage.sh"
 
 main() {
   require_root
@@ -58,6 +60,7 @@ main() {
   install_caddy_config
   install_start
   install_observability
+  install_storage
 
   echo
   info "Instalação concluída."
