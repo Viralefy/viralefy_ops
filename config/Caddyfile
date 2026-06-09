@@ -123,6 +123,20 @@ www.{$DOMAIN_FRONT} {
 	# /health e /ready continuam públicos (necessários p/ load balancers).
 	# CORS é responsabilidade da API (CORS_ORIGINS em .env).
 
+	# ---- Defesa em profundidade: /internal/* nunca pode vazar pra fora ---- #
+	# Os endpoints /internal/v1/* são callbacks loopback entre microservices
+	# (PHASE-8). Já são gateados por X-Internal-Token, mas: 1) o token vaza se
+	# logamos request body em erro, 2) qualquer probe externo conseguia ver
+	# 401 + trace_id (info disclosure), 3) bruteforce era teoricamente possível.
+	# Bloqueio na borda fecha as 3 brechas. Retornamos 404 (não 403) pra não
+	# revelar que a rota existe.
+	@internal path /internal/*
+	handle @internal {
+		respond "Not Found" 404 {
+			close
+		}
+	}
+
 	# ---- Webhooks de pagamento → viralefy_payments (127.0.0.1:8081) ---- #
 	# Stripe/Heleket/Woovi/AbacatePay entregam em api.viralefy.com/v1/webhooks/
 	# <provider>; o microservice valida assinatura + idempotência e chama o
