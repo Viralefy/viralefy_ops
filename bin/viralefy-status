@@ -91,3 +91,37 @@ if systemctl is-active postgresql >/dev/null 2>&1; then
 else
   no "postgresql inativo"
 fi
+
+bold "Object storage (MinIO):"
+if docker inspect --format='{{.State.Health.Status}}' viralefy-storage 2>/dev/null | grep -q healthy; then
+  ok "viralefy-storage container healthy"
+  if curl -fsS -o /dev/null --max-time 3 "http://127.0.0.1:9000/minio/health/ready" 2>/dev/null; then
+    ok "MinIO S3 endpoint ready (127.0.0.1:9000)"
+  else
+    warn "MinIO ready endpoint não respondeu"
+  fi
+elif command -v docker >/dev/null 2>&1; then
+  no "viralefy-storage container ausente/unhealthy — rodar install_storage"
+else
+  warn "docker ausente — storage não instalado"
+fi
+
+bold "Sentry (error reporting):"
+# DSN_API: server-only. DSN_FRONT/BACKOFFICE: NEXT_PUBLIC_ (visíveis no bundle).
+# Sentry SDK é no-op quando DSN vazio — alerta o operador quando esquecer.
+sentry_state=ok
+for var in SENTRY_DSN NEXT_PUBLIC_SENTRY_DSN; do
+  val="${!var:-}"
+  if [[ -z "$val" ]]; then
+    warn "$var não setado — Sentry $var em modo no-op"
+    sentry_state=warn
+  fi
+done
+if [[ "$sentry_state" == "ok" ]]; then
+  ok "DSNs presentes — Sentry SDK ativo nos 3 services"
+  if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
+    warn "SENTRY_AUTH_TOKEN ausente — stack traces sem source map (ofuscados)"
+  else
+    ok "SENTRY_AUTH_TOKEN presente — source map upload no CI configurável"
+  fi
+fi
