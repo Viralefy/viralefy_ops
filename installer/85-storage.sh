@@ -26,9 +26,11 @@ install_storage_docker() {
   if command -v docker >/dev/null 2>&1; then
     log "docker já presente: $(docker --version)"
   else
-    log "instalando docker.io via apt"
+    log "instalando docker.io + docker-cli via apt"
     apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io
+    # Debian 13 separa daemon (docker.io) e cliente (docker-cli) em pacotes.
+    # Sem docker-cli, o binário /usr/bin/docker não existe e tudo abaixo quebra.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io docker-cli
     systemctl enable --now docker
   fi
   # Compose v2 plugin: Debian 13 nomeia `docker-compose`, Ubuntu nomeia
