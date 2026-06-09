@@ -166,6 +166,22 @@ done
   bash "$ROOT_DIR/ops/installer/60-systemd.sh" >/dev/null 2>&1 || true
 systemctl daemon-reload
 
+# Sincroniza Caddyfile (ops repo é a source of truth). Sem isso, mudanças
+# em handle_path / reverse_proxy / new route não chegam em prod sem ssh
+# manual + cp. caddy validate antes de reload pra não rebootar com config
+# quebrado. Reload é graceful — não derruba conexões em flight.
+if [[ -f "$ROOT_DIR/ops/config/Caddyfile" ]]; then
+  if ! diff -q "$ROOT_DIR/ops/config/Caddyfile" /etc/caddy/Caddyfile >/dev/null 2>&1; then
+    if caddy validate --config "$ROOT_DIR/ops/config/Caddyfile" --envfile /etc/caddy/viralefy.env >/dev/null 2>&1; then
+      cp "$ROOT_DIR/ops/config/Caddyfile" /etc/caddy/Caddyfile
+      systemctl reload caddy
+      echo "[ok] Caddyfile atualizado + reload"
+    else
+      echo "[warn] Caddyfile no repo NÃO valida — mantendo /etc/caddy/Caddyfile atual"
+    fi
+  fi
+fi
+
 # Microservices primeiro (deps do api).
 systemctl start viralefy-payments viralefy-sender
 systemctl start viralefy-api viralefy-front viralefy-backoffice
