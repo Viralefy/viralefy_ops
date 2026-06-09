@@ -206,6 +206,21 @@ fi
 
 log "deploy ok ✓"
 
+# Smoke check pós-deploy: contrato HTTP dos 3 services + endpoint público
+# + auth gate. Falha aqui é grave — não fazemos rollback automático (o
+# healthcheck loopback já passou), mas devolvemos exit 1 pra CI/operador
+# investigar antes de declarar deploy verde.
+SMOKE_BIN="/usr/local/sbin/viralefy-smoke"
+[[ -x "$SMOKE_BIN" ]] || SMOKE_BIN="$ROOT_DIR/ops/bin/viralefy-smoke"
+if [[ -x "$SMOKE_BIN" ]]; then
+  log "rodando smoke check ($SMOKE_BIN)"
+  if ! "$SMOKE_BIN"; then
+    echo "[warn] smoke falhou — services up mas contrato HTTP quebrado"
+    echo "[warn] investigue 'journalctl -u viralefy-{api,payments,sender} -n 50'"
+    exit 1
+  fi
+fi
+
 # Cleanup em background, não bloqueia
 (rm -rf "$PREV_DIR" 2>/dev/null) &
 

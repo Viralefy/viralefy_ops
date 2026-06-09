@@ -19,7 +19,7 @@ install_systemd() {
 
   # Os CLIs (update/status/logs/backup) ficam em /usr/local/sbin pra
   # sobreviverem ao rm -rf de /viralefy/ops durante o update destrutivo.
-  for cmd in viralefy-update viralefy-status viralefy-logs viralefy-backup; do
+  for cmd in viralefy-update viralefy-status viralefy-logs viralefy-backup viralefy-smoke; do
     install -m 0755 -o root -g root "$ops_dir/bin/$cmd" "/usr/local/sbin/$cmd"
   done
 

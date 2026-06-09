@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# viralefy-smoke — verificação leve pós-deploy dos 3 services + endpoints
+# chave da API. Rodar DEPOIS de `viralefy-update` (o update já roda o
+# healthcheck loopback básico; este script complementa com endpoints reais
+# do contrato HTTP da Fase 8).
+#
+# Exit 1 em qualquer falha → integração com systemd OnFailure e CI fica
+# trivial.
+#
+# Critérios (Phase 8 §10):
+#   1. viralefy-api    GET 127.0.0.1:8080/health           → 200
+#   2. viralefy-payments GET 127.0.0.1:8081/internal/health → 200
+#   3. viralefy-sender   GET 127.0.0.1:8082/internal/health → 200
+#   4. GET /v1/plans (público, sem auth)                   → 200 + JSON array
+#   5. POST /v1/me/2fa/status (sem Bearer)                 → 401 (auth gate ok)
+#
+# Sem deps externas. Usa só curl + jq quando disponível (fallback grep).
+
+set -euo pipefail
+IFS=$'\n\t'
+
+API_HOST="${VIRALEFY_API_HOST:-127.0.0.1:8080}"
+PAY_HOST="${VIRALEFY_PAY_HOST:-127.0.0.1:8081}"
+SND_HOST="${VIRALEFY_SND_HOST:-127.0.0.1:8082}"
+
+FAIL=0
+ok()   { echo "  ok    $*"; }
+bad()  { echo "  FAIL  $*"; FAIL=1; }
+note() { echo "[smoke] $*"; }
+
+# Curl helper: imprime status code; corpo em $TMPBODY.
+TMPBODY="$(mktemp)"
+trap 'rm -f "$TMPBODY"' EXIT
+
+http_code() {
+  local method="$1" url="$2"
+  curl -sS -o "$TMPBODY" -w '%{http_code}' -X "$method" \
+       --max-time 5 --connect-timeout 2 "$url" 2>/dev/null || echo "000"
+}
+
+# ─── 1-3. Healths dos 3 services ──────────────────────────────────────────
+note "health dos 3 services"
+for entry in \
+    "api    http://$API_HOST/health" \
+    "pay    http://$PAY_HOST/internal/health" \
+    "sender http://$SND_HOST/internal/health"; do
+  svc="${entry%% *}"
+  url="${entry##* }"
+  code="$(http_code GET "$url")"
+  if [[ "$code" == "200" ]]; then
+    ok "$svc $url → 200"
+  else
+    bad "$svc $url → $code (esperado 200)"
+  fi
+done
+
+# ─── 4. GET /v1/plans público (sem auth) ──────────────────────────────────
+note "endpoint público /v1/plans"
+code="$(http_code GET "http://$API_HOST/v1/plans")"
+if [[ "$code" == "200" ]]; then
+  # Verifica que é JSON array (catálogo não-vazio é overkill — POC pode ter 0)
+  if head -c 1 "$TMPBODY" | grep -q '^\[' \
+     || grep -q '"plans"' "$TMPBODY" 2>/dev/null; then
+    ok "/v1/plans → 200 + JSON"
+  else
+    bad "/v1/plans → 200 mas corpo não parece JSON ($(head -c 80 "$TMPBODY"))"
+  fi
+else
+  bad "/v1/plans → $code (esperado 200)"
+fi
+
+# ─── 5. POST /v1/me/2fa/status sem Bearer → 401 ───────────────────────────
+note "auth gate em /v1/me/2fa/status (sem Bearer)"
+code="$(http_code POST "http://$API_HOST/v1/me/2fa/status")"
+if [[ "$code" == "401" ]]; then
+  ok "/v1/me/2fa/status (sem token) → 401"
+else
+  bad "/v1/me/2fa/status (sem token) → $code (esperado 401)"
+fi
+
+# ─── Resultado ────────────────────────────────────────────────────────────
+echo
+if [[ $FAIL -eq 0 ]]; then
+  note "smoke OK"
+  exit 0
+fi
+note "smoke FALHOU"
+exit 1
