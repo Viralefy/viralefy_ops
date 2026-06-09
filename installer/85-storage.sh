@@ -25,12 +25,26 @@ install_storage() {
 install_storage_docker() {
   if command -v docker >/dev/null 2>&1; then
     log "docker já presente: $(docker --version)"
-    return
+  else
+    log "instalando docker.io via apt"
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io
+    systemctl enable --now docker
   fi
-  log "instalando docker.io via apt"
-  apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io docker-compose-v2
-  systemctl enable --now docker
+  # Compose v2 plugin: Debian 13 nomeia `docker-compose`, Ubuntu nomeia
+  # `docker-compose-v2`. Tentamos os dois; um deles vai resolver. Em
+  # sistemas com Docker Engine oficial vem como `docker-compose-plugin`.
+  if ! docker compose version >/dev/null 2>&1; then
+    log "instalando compose plugin (tentando os 3 nomes de pacote conhecidos)"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-compose 2>/dev/null \
+      || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-compose-v2 2>/dev/null \
+      || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-compose-plugin 2>/dev/null \
+      || true
+  fi
+  if ! docker compose version >/dev/null 2>&1; then
+    log "ERRO: docker compose ainda ausente após apt — instalar manualmente"
+    return 1
+  fi
 }
 
 install_storage_dirs() {
@@ -65,8 +79,25 @@ install_storage_secrets() {
 }
 
 install_storage_compose() {
-  local src=/viralefy/viralefy_ops/config/docker-compose.storage.yml
-  local dst=/etc/viralefy-storage/docker-compose.yml
+  # OPS_DIR é setado pelo viralefy-install. Quando rodado fora do orquestrador
+  # (manual install_storage), procuramos nos caminhos canônicos da VPS — o
+  # repo de ops pode ter sido clonado como /viralefy/ops/ (viralefy-update)
+  # OU /viralefy/viralefy_ops/ (instalador antigo).
+  local src dst
+  dst=/etc/viralefy-storage/docker-compose.yml
+  for candidate in \
+    "${OPS_DIR:-}/config/docker-compose.storage.yml" \
+    /viralefy/ops/config/docker-compose.storage.yml \
+    /viralefy/viralefy_ops/config/docker-compose.storage.yml; do
+    if [[ -f "$candidate" ]]; then
+      src="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$src" ]]; then
+    log "ERRO: docker-compose.storage.yml não encontrado em nenhum caminho conhecido"
+    return 1
+  fi
   install -m 0640 -o root -g root "$src" "$dst"
 }
 
