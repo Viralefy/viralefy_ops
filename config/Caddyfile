@@ -124,27 +124,39 @@ www.{$DOMAIN_FRONT} {
 	# CORS é responsabilidade da API (CORS_ORIGINS em .env).
 
 	# ---- Webhooks de pagamento → viralefy_payments (127.0.0.1:8081) ---- #
-	# Stripe/Heleket/Woovi entregam aqui via internet; o microservice
-	# valida assinatura + idempotency e chama o callback interno na API.
-	# handle_path remove o prefixo /v1/webhooks/<provider> antes do upstream,
-	# então payments expõe /internal/webhooks/stripe etc. casando o que
-	# sobra no path.
-	handle_path /v1/webhooks/stripe* {
+	# Stripe/Heleket/Woovi/AbacatePay entregam em api.viralefy.com/v1/webhooks/
+	# <provider>; o microservice valida assinatura + idempotência e chama o
+	# callback interno na API monolítica.
+	#
+	# IMPORTANTE: usamos `handle` (não `handle_path`) + rewrite pra preservar
+	# o path e PREPENDER `/internal`. Assim a rota no payments é
+	# `POST /internal/v1/webhooks/<provider>` — case com o router de lá.
+	handle /v1/webhooks/stripe* {
+		rewrite * /internal{path}
 		reverse_proxy 127.0.0.1:8081 {
 			header_up X-Real-IP {http.request.remote.host}
 			header_up X-Forwarded-Webhook "stripe"
 		}
 	}
-	handle_path /v1/webhooks/heleket* {
+	handle /v1/webhooks/heleket* {
+		rewrite * /internal{path}
 		reverse_proxy 127.0.0.1:8081 {
 			header_up X-Real-IP {http.request.remote.host}
 			header_up X-Forwarded-Webhook "heleket"
 		}
 	}
-	handle_path /v1/webhooks/woovi* {
+	handle /v1/webhooks/woovi* {
+		rewrite * /internal{path}
 		reverse_proxy 127.0.0.1:8081 {
 			header_up X-Real-IP {http.request.remote.host}
 			header_up X-Forwarded-Webhook "woovi"
+		}
+	}
+	handle /v1/webhooks/abacatepay* {
+		rewrite * /internal{path}
+		reverse_proxy 127.0.0.1:8081 {
+			header_up X-Real-IP {http.request.remote.host}
+			header_up X-Forwarded-Webhook "abacatepay"
 		}
 	}
 
