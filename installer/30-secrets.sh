@@ -31,6 +31,10 @@ install_secrets() {
   : "${BIND_HOST:=127.0.0.1}"
   : "${JWT_SECRET:=$(gen_secret 64)}"
   : "${DATABASE_PASSWORD:=$(gen_secret 32)}"
+  # 2FA encryption key — AES-256 (32 bytes). Cifra secrets TOTP em rest.
+  # Hex 64 chars. Vazio = 2FA disabled. Trocar essa key invalida TODOS os
+  # enrollments existentes (re-enroll obrigatório) — não rotacionar.
+  : "${TWOFA_ENCRYPTION_KEY:=$(openssl rand -hex 32)}"
   : "${DATABASE_URL:=postgres://viralefy:${DATABASE_PASSWORD}@localhost:5432/viralefy?sslmode=disable}"
 
   : "${EMAIL_PROVIDER:=resend}"
@@ -96,7 +100,8 @@ install_secrets() {
          NEXT_PUBLIC_API_URL NEXT_PUBLIC_SITE_URL \
          NEXT_PUBLIC_TURNSTILE_SITE_KEY TURNSTILE_SECRET_KEY ADMIN_WEBHOOK_URL \
          DOMAIN_FRONT DOMAIN_BACKOFFICE DOMAIN_API DOMAIN_OBS CADDY_EMAIL BIND_HOST \
-         GRAFANA_ADMIN_PASSWORD OTEL_EXPORTER_OTLP_ENDPOINT
+         GRAFANA_ADMIN_PASSWORD OTEL_EXPORTER_OTLP_ENDPOINT \
+         TWOFA_ENCRYPTION_KEY
 
   umask 027
   cat > "$ENV_FILE" <<-ENV
@@ -109,6 +114,7 @@ install_secrets() {
 		DATABASE_URL=$DATABASE_URL
 		DATABASE_PASSWORD=$DATABASE_PASSWORD
 		JWT_SECRET=$JWT_SECRET
+		TWOFA_ENCRYPTION_KEY=$TWOFA_ENCRYPTION_KEY
 		CORS_ORIGINS=$CORS_ORIGINS
 
 		# ---- E-mail (Resend) ---- #
