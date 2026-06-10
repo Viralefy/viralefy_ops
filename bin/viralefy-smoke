@@ -54,6 +54,26 @@ for entry in \
   fi
 done
 
+# ─── PHASE-9 (opcional): healths de core/auth/dispatcher ───────────────────
+# Se os services estão deployados, smoke também valida. Skip silencioso se
+# port não responder — durante cutover muitos hosts ainda não terão tudo.
+note "PHASE-9 services (skip se inativo)"
+for entry in \
+    "core       http://${VIRALEFY_CORE_HOST:-127.0.0.1:8084}/health" \
+    "auth       http://${VIRALEFY_AUTH_HOST:-127.0.0.1:8083}/internal/v1/health" \
+    "dispatcher http://${VIRALEFY_DISP_HOST:-127.0.0.1:8090}/_health"; do
+  svc="${entry%% *}"
+  url="${entry##* }"
+  code="$(http_code GET "$url")"
+  if [[ "$code" == "200" ]]; then
+    ok "$svc $url → 200"
+  elif [[ "$code" == "000" ]]; then
+    echo "  skip  $svc não responde (PHASE-9 desabilitado?)"
+  else
+    bad "$svc $url → $code (esperado 200 ou 000)"
+  fi
+done
+
 # ─── 4. GET /v1/plans público (sem auth) ──────────────────────────────────
 note "endpoint público /v1/plans"
 code="$(http_code GET "http://$API_HOST/v1/plans")"
