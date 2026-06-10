@@ -14,7 +14,11 @@ EnvironmentFile=/etc/viralefy/.env
 # Porta dedicada pra deploy paralelo SEM mudar tráfego.
 # A api legacy continua em :8080; core sobe em :8084 e fica disponível
 # pra dispatcher rotear quando feature flag PHASE9_ENABLE_CORE=true.
-Environment=BIND_ADDR=127.0.0.1:8084
+# CORE_PORT tem precedência sobre PORT no config.go — necessário pq o
+# /etc/viralefy/.env compartilhado tem PORT=8080 (api legacy) e
+# EnvironmentFile= é processado APÓS Environment= no systemd.
+Environment=CORE_PORT=8084
+Environment=BIND_HOST=127.0.0.1
 Environment=OTEL_SERVICE_NAME=viralefy-core
 Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
 Environment=OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
