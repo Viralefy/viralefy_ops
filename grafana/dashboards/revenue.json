@@ -1,0 +1,352 @@
+{
+  "_comment": "Viralefy — Revenue dashboard. Most panels here depend on business metrics that are NOT exposed by the current /metrics surface (see viralefy_api/internal/infrastructure/observability/metrics.go — only http_*, db_query_*, gateway_callbacks_total, viralefy_plan_price_drift_rows exist). TODOs below mark metrics that require either (a) postgres-exporter custom queries against orders/plans tables, or (b) new application-level Prometheus collectors. Panels that can be approximated from gateway_callbacks_total are wired live; the rest render 'No data' until the underlying source is shipped.",
+  "_todo_metrics": [
+    "viralefy_revenue_total{currency,period} — sum(amount_cents) FROM orders WHERE status='paid' grouped by day/week/month. Ship via postgres-exporter custom query.",
+    "viralefy_orders_total{gateway,status} — counter incremented in payments service on order state transitions.",
+    "viralefy_refunds_total{gateway,reason} — counter on refund webhooks.",
+    "viralefy_plan_revenue{plan_id,plan_name} — postgres-exporter custom query joining orders+plans.",
+    "viralefy_funnel_step{step} — gauge per checkout step (view, intent, paid) for conversion rate."
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Receita recorrente, pedidos por gateway, reembolsos, planos top e taxa de conversão. Maioria dos painéis precisa de postgres-exporter custom queries (ver _todo_metrics).",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "MRR aproximada — soma do último valor da gauge viralefy_revenue_total{period='month'}. TODO: requer postgres-exporter custom query.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "currencyUSD",
+          "decimals": 2
+        }
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(viralefy_revenue_total{period=\"month\"})",
+          "legendFormat": "MRR",
+          "refId": "A"
+        }
+      ],
+      "title": "MRR (Monthly Recurring Revenue)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "WRR — soma do período 'week'. TODO: requer postgres-exporter custom query.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] },
+          "unit": "currencyUSD",
+          "decimals": 2
+        }
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(viralefy_revenue_total{period=\"week\"})",
+          "legendFormat": "WRR",
+          "refId": "A"
+        }
+      ],
+      "title": "WRR (Weekly Recurring Revenue)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Receita diária (24h) — soma do período 'day'. TODO: requer postgres-exporter custom query.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] },
+          "unit": "currencyUSD",
+          "decimals": 2
+        }
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(viralefy_revenue_total{period=\"day\"})",
+          "legendFormat": "DRR",
+          "refId": "A"
+        }
+      ],
+      "title": "DRR (Daily Revenue)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Taxa de conversão estimada — paid / intent. TODO: requer viralefy_funnel_step.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.02 },
+              { "color": "green", "value": 0.05 }
+            ]
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "decimals": 2
+        }
+      },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(viralefy_funnel_step{step=\"paid\"}) / clamp_min(sum(viralefy_funnel_step{step=\"intent\"}), 1)",
+          "legendFormat": "conversion",
+          "refId": "A"
+        }
+      ],
+      "title": "Conversion rate (paid / intent)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Pedidos pagos por gateway ao longo do tempo. Aproximação via gateway_callbacks_total{status='paid'} (métrica real, mas só conta webhooks — pedidos sem webhook não aparecem).",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisLabel": "orders/h",
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "stacking": { "group": "A", "mode": "normal" }
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 5 },
+      "id": 5,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (provider) (increase(gateway_callbacks_total{status=~\"paid|confirmed|approved\"}[1h]))",
+          "legendFormat": "{{provider}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Orders by gateway (paid webhooks / hour)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Receita total empilhada por moeda. TODO: requer postgres-exporter custom query exportando viralefy_revenue_total{currency}.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "stacking": { "group": "A", "mode": "normal" }
+          },
+          "unit": "currencyUSD"
+        }
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 5 },
+      "id": 6,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (currency) (viralefy_revenue_total{period=\"day\"})",
+          "legendFormat": "{{currency}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Daily revenue by currency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Reembolsos por provider. Aproximação via gateway_callbacks_total{status='refunded'}.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "id": 7,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (provider) (increase(gateway_callbacks_total{status=~\"refund.*|chargeback.*|cancelled\"}[24h]))",
+          "legendFormat": "{{provider}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Refunds & chargebacks (24h rolling) by provider",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Top 10 planos por receita no período. TODO: requer postgres-exporter custom query viralefy_plan_revenue{plan_name}.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "align": "auto", "displayMode": "color-background", "minWidth": 50 },
+          "unit": "currencyUSD",
+          "decimals": 2
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "id": 8,
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "Value", "desc": true }] },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "topk(10, sum by (plan_name) (viralefy_plan_revenue))",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "{{plan_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Top 10 plans by revenue",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "plan_prices linhas com amount fora da fórmula USD * rate por moeda. Métrica real (viralefy_plan_price_drift_rows). Alerta sugerido: > 5 por > 12h.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 22 },
+      "id": 9,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "viralefy_plan_price_drift_rows",
+          "legendFormat": "{{currency_code}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Plan price drift rows (per currency)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["viralefy", "production", "revenue"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "Prometheus", "value": "Prometheus" },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-30d", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Viralefy — Revenue",
+  "uid": "viralefy-revenue",
+  "version": 1,
+  "weekStart": ""
+}

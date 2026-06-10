@@ -270,6 +270,19 @@ www.{$DOMAIN_FRONT} {
 		}
 	}
 
+	# ---- PHASE-9 Bucket 2c — auth flows via viralefy_auth ---- #
+	# /v1/auth/{user/register,user/login,user/login/2fa,login,login/2fa,login/2fa/enroll}
+	# → dispatcher → viralefy_auth (:8083). Public routes adicionadas em
+	# auth (commit ed5ead4) que delegam aos handlers internos derivando
+	# kind:user|admin do path. Rate limit in-memory 10/15min per-IP via
+	# X-Real-IP propagado pelo Caddy → dispatcher → auth. RS256 mint usa
+	# mesma RSA key compartilhada → tokens interchangeable com legacy/core.
+	handle /v1/auth* {
+		reverse_proxy 127.0.0.1:8090 {
+			header_up X-Real-IP {http.request.remote.host}
+		}
+	}
+
 	# Default — tudo que não bateu nos handle_path acima vai pro monolito.
 	reverse_proxy 127.0.0.1:8080 {
 		header_up X-Real-IP {http.request.remote.host}
