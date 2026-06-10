@@ -202,6 +202,50 @@ www.{$DOMAIN_FRONT} {
 		}
 	}
 
+	# ---- PHASE-9 Bucket 1 — public read-only via dispatcher (:8090) ---- #
+	# Strangler cutover por bucket: rotas idempotentes e públicas (sem auth)
+	# vão pra Rust dispatcher → routes pra viralefy_core (:8084) ou viralefy_auth
+	# (:8083, no caso de JWKS). Parity 100% validada antes do swap (status+body
+	# identical legacy vs dispatcher pra todos os paths abaixo).
+	#
+	# Rollback: comentar este bloco e reload Caddy — volta pro :8080 monolito.
+	# Bucket 2 (auth user), 3 (admin), 4 (checkout) seguem em sessões futuras.
+	handle /v1/plans* {
+		reverse_proxy 127.0.0.1:8090 {
+			header_up X-Real-IP {http.request.remote.host}
+		}
+	}
+	handle /v1/categories* {
+		reverse_proxy 127.0.0.1:8090 {
+			header_up X-Real-IP {http.request.remote.host}
+		}
+	}
+	handle /v1/currencies* {
+		reverse_proxy 127.0.0.1:8090 {
+			header_up X-Real-IP {http.request.remote.host}
+		}
+	}
+	handle /v1/status* {
+		reverse_proxy 127.0.0.1:8090 {
+			header_up X-Real-IP {http.request.remote.host}
+		}
+	}
+	handle /v1/country-ppp* {
+		reverse_proxy 127.0.0.1:8090 {
+			header_up X-Real-IP {http.request.remote.host}
+		}
+	}
+	handle /v1/tax-rates* {
+		reverse_proxy 127.0.0.1:8090 {
+			header_up X-Real-IP {http.request.remote.host}
+		}
+	}
+	handle /.well-known/jwks.json {
+		reverse_proxy 127.0.0.1:8090 {
+			header_up X-Real-IP {http.request.remote.host}
+		}
+	}
+
 	# Default — tudo que não bateu nos handle_path acima vai pro monolito.
 	reverse_proxy 127.0.0.1:8080 {
 		header_up X-Real-IP {http.request.remote.host}
