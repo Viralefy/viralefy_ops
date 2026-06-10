@@ -1,0 +1,59 @@
+[Unit]
+Description=Viralefy Auth — identidade (Go) — port 8083, loopback only
+Documentation=https://github.com/Viralefy/viralefy_auth
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=viralefy-auth
+Group=viralefy
+WorkingDirectory=/viralefy/auth
+EnvironmentFile=/etc/viralefy/.env
+Environment=VAUTH_BIND_ADDR=127.0.0.1:8083
+Environment=OTEL_SERVICE_NAME=viralefy-auth
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+Environment=OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+ExecStart=/usr/local/sbin/viralefy-auth
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+# Hardening máximo — auth tem chaves RS256 + 2FA secrets.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateMounts=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/viralefy/auth
+ReadOnlyPaths=/etc/viralefy
+# Loopback only — auth não conversa com mundo externo.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=viralefy-auth
+
+[Install]
+WantedBy=multi-user.target

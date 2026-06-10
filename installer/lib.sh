@@ -17,7 +17,11 @@ REPO_BASE="${VIRALEFY_REPO_BASE:-https://github.com/$ORG}"
 BRANCH="${VIRALEFY_BRANCH:-main}"
 
 # Pacotes desplegados (cada um vira /viralefy/<pkg> e um usuário systemd).
-PACKAGES=(api front backoffice payments sender)
+#
+# PHASE-9 adicionou core/auth/dispatcher. Eles são deployados PARALELO ao
+# stack legacy — api/front/backoffice/payments/sender continuam funcionando.
+# Cutover gradual via Caddy upstream switch, não via swap atômico.
+PACKAGES=(api front backoffice payments sender core auth dispatcher)
 
 # Mapeamento package -> repo (basename). archive também é clonado mas não roda.
 declare -A REPO_OF=(
@@ -28,6 +32,9 @@ declare -A REPO_OF=(
   [sender]="viralefy_sender"
   [archive]="viralefy_archive"
   [ops]="viralefy_ops"
+  [core]="viralefy_core"
+  [auth]="viralefy_auth"
+  [dispatcher]="viralefy_dispatcher"
 )
 
 # Versões alvo (pinadas — diretrizes Anexo A).

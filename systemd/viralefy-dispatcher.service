@@ -1,0 +1,64 @@
+[Unit]
+Description=Viralefy Dispatcher — Rust borda de segurança — port 8090
+Documentation=https://github.com/Viralefy/viralefy_dispatcher
+After=network-online.target postgresql.service viralefy-core.service viralefy-auth.service
+Wants=network-online.target postgresql.service viralefy-core.service viralefy-auth.service
+
+[Service]
+Type=simple
+User=viralefy-dispatcher
+Group=viralefy
+WorkingDirectory=/viralefy/dispatcher
+EnvironmentFile=/etc/viralefy/.env
+# Em deploy paralelo, dispatcher sobe em :8090 (não :8080 que é a api legacy).
+# Após cutover, Caddy reverse-proxy passa de :8080 → :8090.
+Environment=VAPI_BIND_ADDR=127.0.0.1:8090
+Environment=VAPI_CORE_URL=http://127.0.0.1:8084
+Environment=VAPI_AUTH_URL=http://127.0.0.1:8083
+Environment=VAPI_PAYMENTS_URL=http://127.0.0.1:8081
+Environment=VAPI_SENDER_URL=http://127.0.0.1:8082
+Environment=OTEL_SERVICE_NAME=viralefy-dispatcher
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+Environment=OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+ExecStart=/usr/local/sbin/viralefy-dispatcher
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+# Hardening — dispatcher é a borda, alvo de ataques. Máximo isolamento.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateMounts=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+# Rust não usa JIT, OK ter MemoryDenyWriteExecute.
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/viralefy/dispatcher
+ReadOnlyPaths=/etc/viralefy
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=viralefy-dispatcher
+
+[Install]
+WantedBy=multi-user.target

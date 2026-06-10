@@ -65,12 +65,23 @@ log "carregando segredos"
 set -a; source "$ENV_FILE"; set +a
 
 # ---------- Clones em paralelo ---------- #
-# 7 repos: api, front, backoffice, payments, sender, ops, archive.
-log "clonando 7 repos em paralelo pra $NEXT_DIR"
+# 10 repos: 7 legacy (api/front/backoffice/payments/sender/ops/archive) +
+# 3 PHASE-9 (core/auth/dispatcher). PHASE-9 são tolerantes a erro de clone
+# (repo pode ser private/missing em ambientes < phase-9-ready) — fall back
+# silenciosa pra continuar o deploy legacy.
+log "clonando repos em paralelo pra $NEXT_DIR"
 clone_one() {
   local repo="$1" pkg="$2" user="$3"
   git clone --quiet --depth 1 --branch "$BRANCH" "$REPO_BASE/$repo.git" "$NEXT_DIR/$pkg"
   chown -R "$user:viralefy" "$NEXT_DIR/$pkg"
+}
+clone_optional() {
+  local repo="$1" pkg="$2" user="$3"
+  if git clone --quiet --depth 1 --branch "$BRANCH" "$REPO_BASE/$repo.git" "$NEXT_DIR/$pkg" 2>/dev/null; then
+    chown -R "$user:viralefy" "$NEXT_DIR/$pkg"
+  else
+    echo "[warn] $repo não disponível — pulando (PHASE-9 ainda não pronto pra este host)"
+  fi
 }
 clone_one viralefy_api        api        viralefy-api &
 clone_one viralefy_payments   payments   viralefy-payments &
@@ -79,6 +90,9 @@ clone_one viralefy_front      front      viralefy-front &
 clone_one viralefy_backoffice backoffice viralefy-backoffice &
 clone_one viralefy_ops        ops        root &
 clone_one viralefy_archive    archive    root &
+clone_optional viralefy_core       core       viralefy-core &
+clone_optional viralefy_auth       auth       viralefy-auth &
+clone_optional viralefy_dispatcher dispatcher viralefy-dispatcher &
 wait
 log "clones ok"
 
@@ -113,6 +127,20 @@ build_node() {
   sudo -u "$user" -H bash -c "cd '$d' && npm ci --no-audit --no-fund --silent && npm run build --silent"
 }
 
+# Build de Rust binary (dispatcher). cargo é instalado por bootstrap.sh quando
+# PHASE-9 estiver ativo; se não tiver cargo, skip silencioso.
+build_rust_svc() {
+  local pkg="$1" cmd_path="$2"
+  local d="$NEXT_DIR/$pkg" user="viralefy-$pkg" bin="viralefy-$pkg"
+  install -d -m 0755 -o "$user" -g viralefy "$d/bin"
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "[skip] cargo ausente — pulando build $pkg"
+    return 0
+  fi
+  sudo -u "$user" -H env PATH="$HOME/.cargo/bin:$PATH" \
+    bash -c "cd '$d' && cargo build --release 2>&1 && cp -f target/release/$bin bin/$bin"
+}
+
 build_api > /tmp/build-api.log 2>&1 &
 PID_API=$!
 build_go_svc payments cmd/payments > /tmp/build-payments.log 2>&1 &
@@ -124,6 +152,22 @@ PID_FRONT=$!
 build_node backoffice > /tmp/build-backoffice.log 2>&1 &
 PID_BACK=$!
 
+# PHASE-9 builds: core (Go), auth (Go), dispatcher (Rust). Cada um só roda
+# se o clone foi bem-sucedido. Falha aqui NÃO bloqueia o deploy legacy.
+PID_CORE=""; PID_AUTH=""; PID_DISP=""
+if [[ -d "$NEXT_DIR/core" ]]; then
+  build_go_svc core cmd/core > /tmp/build-core.log 2>&1 &
+  PID_CORE=$!
+fi
+if [[ -d "$NEXT_DIR/auth" ]]; then
+  build_go_svc auth cmd/auth > /tmp/build-auth.log 2>&1 &
+  PID_AUTH=$!
+fi
+if [[ -d "$NEXT_DIR/dispatcher" ]]; then
+  build_rust_svc dispatcher . > /tmp/build-dispatcher.log 2>&1 &
+  PID_DISP=$!
+fi
+
 # Espera + checa exit codes (paralelismo seguro)
 FAIL=0
 wait $PID_API || { echo "FALHA build API"; tail -30 /tmp/build-api.log; FAIL=1; }
@@ -131,6 +175,18 @@ wait $PID_PAY || { echo "FALHA build payments"; tail -30 /tmp/build-payments.log
 wait $PID_SND || { echo "FALHA build sender"; tail -30 /tmp/build-sender.log; FAIL=1; }
 wait $PID_FRONT || { echo "FALHA build front"; tail -30 /tmp/build-front.log; FAIL=1; }
 wait $PID_BACK || { echo "FALHA build backoffice"; tail -30 /tmp/build-backoffice.log; FAIL=1; }
+
+# PHASE-9 build waits — NÃO derrubam deploy legacy se falharem (avisamos só).
+PHASE9_FAIL=0
+if [[ -n "$PID_CORE" ]]; then
+  wait $PID_CORE || { echo "[warn] FALHA build core (não bloqueia legacy)"; tail -20 /tmp/build-core.log; PHASE9_FAIL=1; }
+fi
+if [[ -n "$PID_AUTH" ]]; then
+  wait $PID_AUTH || { echo "[warn] FALHA build auth (não bloqueia legacy)"; tail -20 /tmp/build-auth.log; PHASE9_FAIL=1; }
+fi
+if [[ -n "$PID_DISP" ]]; then
+  wait $PID_DISP || { echo "[warn] FALHA build dispatcher (não bloqueia legacy)"; tail -20 /tmp/build-dispatcher.log; PHASE9_FAIL=1; }
+fi
 
 if [[ $FAIL -eq 1 ]]; then
   echo "Build falhou. /viralefy/ atual intocado. Staging em $NEXT_DIR."
@@ -154,7 +210,9 @@ mv "$NEXT_DIR" "$ROOT_DIR"
 
 # Copia binários dos microservices pra /usr/local/sbin (ExecStart dos units
 # aponta lá). API tem ExecStart em /viralefy/api/bin/viralefy-api (in-place).
-for pkg in payments sender; do
+# PHASE-9: core/auth/dispatcher também copiados pra /usr/local/sbin pra
+# que systemd units consigam executar mesmo após `rm -rf /viralefy/<pkg>`.
+for pkg in payments sender core auth dispatcher; do
   if [[ -x "$ROOT_DIR/$pkg/bin/viralefy-$pkg" ]]; then
     install -m 0755 -o root -g root \
       "$ROOT_DIR/$pkg/bin/viralefy-$pkg" "/usr/local/sbin/viralefy-$pkg"

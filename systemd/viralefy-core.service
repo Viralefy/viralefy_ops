@@ -1,0 +1,60 @@
+[Unit]
+Description=Viralefy Core — motor de domínio (Go) — port 8084
+Documentation=https://github.com/Viralefy/viralefy_core
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=viralefy-core
+Group=viralefy
+WorkingDirectory=/viralefy/core
+EnvironmentFile=/etc/viralefy/.env
+# Porta dedicada pra deploy paralelo SEM mudar tráfego.
+# A api legacy continua em :8080; core sobe em :8084 e fica disponível
+# pra dispatcher rotear quando feature flag PHASE9_ENABLE_CORE=true.
+Environment=BIND_ADDR=127.0.0.1:8084
+Environment=OTEL_SERVICE_NAME=viralefy-core
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+Environment=OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+ExecStart=/usr/local/sbin/viralefy-core
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+# Hardening — mesma matriz do viralefy-api.service.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateMounts=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/viralefy/core /etc/viralefy
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=viralefy-core
+
+[Install]
+WantedBy=multi-user.target

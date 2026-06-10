@@ -11,6 +11,16 @@ install_systemd() {
     install -m 0644 -o root -g root "$src/$unit.service" "/etc/systemd/system/$unit.service"
   done
 
+  # PHASE-9: novos units pro core (Go domain motor), auth (Go identidade)
+  # e dispatcher (Rust borda). Instalados mas NÃO habilitados por default;
+  # operador habilita conforme cutover progride. Cada um numa porta
+  # dedicada pra não conflitar com a stack legacy.
+  for unit in viralefy-core viralefy-auth viralefy-dispatcher; do
+    if [[ -f "$src/$unit.service" ]]; then
+      install -m 0644 -o root -g root "$src/$unit.service" "/etc/systemd/system/$unit.service"
+    fi
+  done
+
   # Backup do Postgres: service + timer + diretório de saída.
   for unit in viralefy-backup.service viralefy-backup.timer; do
     install -m 0644 -o root -g root "$src/$unit" "/etc/systemd/system/$unit"
