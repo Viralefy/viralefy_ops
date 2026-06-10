@@ -150,7 +150,38 @@ www.{$DOMAIN_FRONT} {
 	}
 
 	# /health e /ready continuam públicos (necessários p/ load balancers).
-	# CORS é responsabilidade da API (CORS_ORIGINS em .env).
+
+	# ---- CORS — PHASE-9 ---- #
+	# Legacy api tinha go-chi/cors middleware. Após cutover, core mantém
+	# o middleware mas auth/dispatcher NÃO têm. Browser de www.viralefy.com
+	# faz preflight OPTIONS pra api.viralefy.com — sem resposta válida,
+	# fetch falha com "TypeError: Failed to fetch" / network error.
+	# Fix: Caddy responde CORS na borda pra TODAS rotas /v1/*.
+	@cors_preflight {
+		method OPTIONS
+		header Origin *
+	}
+	handle @cors_preflight {
+		header {
+			Access-Control-Allow-Origin "{header.Origin}"
+			Access-Control-Allow-Credentials "true"
+			Access-Control-Allow-Methods "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+			Access-Control-Allow-Headers "Content-Type, Authorization, X-Request-Id, Idempotency-Key, Accept, Accept-Language, User-Agent"
+			Access-Control-Max-Age "600"
+			Vary "Origin"
+		}
+		respond "" 204 {
+			close
+		}
+	}
+	# Em responses normais (não-OPTIONS), adicionar CORS headers se Origin presente.
+	# Caddy aplica esses headers em TODAS responses do bloco.
+	@has_origin header Origin *
+	header @has_origin {
+		Access-Control-Allow-Origin "{header.Origin}"
+		Access-Control-Allow-Credentials "true"
+		Vary "Origin"
+	}
 
 	# ---- Defesa em profundidade: /internal/* nunca pode vazar pra fora ---- #
 	# Os endpoints /internal/v1/* são callbacks loopback entre microservices
