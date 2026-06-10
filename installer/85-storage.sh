@@ -33,18 +33,22 @@ install_storage_docker() {
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io docker-cli
     systemctl enable --now docker
   fi
-  # Compose v2 plugin: Debian 13 nomeia `docker-compose`, Ubuntu nomeia
-  # `docker-compose-v2`. Tentamos os dois; um deles vai resolver. Em
-  # sistemas com Docker Engine oficial vem como `docker-compose-plugin`.
+  # Compose v2 plugin (`docker compose`, com espaço — NÃO v1 `docker-compose`).
+  # Ubuntu 24.04 droppou Python distutils → v1 (que é Python) está quebrada
+  # (DR drill 2026-06-10). Sempre instalar plugin v2.
+  # Nomes de pacote variam: Debian 13 → `docker-compose-v2`; Docker Engine
+  # oficial → `docker-compose-plugin`; legado → `docker-compose` (mas em
+  # distros novas esse já é v2 disfarçado). Tentamos os 3 em ordem segura.
   if ! docker compose version >/dev/null 2>&1; then
-    log "instalando compose plugin (tentando os 3 nomes de pacote conhecidos)"
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-compose 2>/dev/null \
+    log "instalando compose v2 plugin (tentando os 3 nomes conhecidos)"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-compose-plugin 2>/dev/null \
       || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-compose-v2 2>/dev/null \
-      || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-compose-plugin 2>/dev/null \
+      || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-compose 2>/dev/null \
       || true
   fi
   if ! docker compose version >/dev/null 2>&1; then
-    log "ERRO: docker compose ainda ausente após apt — instalar manualmente"
+    log "ERRO: docker compose v2 ausente após apt — instalar manualmente"
+    log "      docker-compose v1 NÃO é suportado (Python distutils removido no 3.12+)"
     return 1
   fi
 }

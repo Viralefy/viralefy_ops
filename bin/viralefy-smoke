@@ -15,6 +15,25 @@
 #   5. POST /v1/me/2fa/status (sem Bearer)                 → 401 (auth gate ok)
 #
 # Sem deps externas. Usa só curl + jq quando disponível (fallback grep).
+#
+# ─── HEALTH ENDPOINT MAPPING (DR drill 2026-06-10) ───────────────────────
+# Heterogeneity histórica: cada serviço expõe healthcheck num path
+# diferente, herdado da fase em que foi escrito. Smoke precisa conhecer
+# todos. TODO PHASE-10: padronizar TUDO em /health + 410 nos legados.
+#
+#   svc                  port   path                    convention
+#   ────────────────────────────────────────────────────────────────────
+#   viralefy-api         8080   /health                 Fase 4 (chi)
+#   viralefy-core        8084   /health                 PHASE-9 (mesma)
+#   viralefy-payments    8081   /internal/health        Fase 8 (loopback)
+#   viralefy-sender      8082   /internal/health        Fase 8 (loopback)
+#   viralefy-auth        8083   /internal/v1/health     PHASE-9 (versionado)
+#   viralefy-dispatcher  8090   /_health                PHASE-9 (Rust hyper)
+#
+# Por que não padronizar agora: legacy api (`/health`) é público em Caddy
+# pra healthcheck externo do Uptime Robot; trocar quebra alerting. Aliases
+# `/health` em payments/sender/auth/dispatcher é tech debt do PHASE-10.
+# ─────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
 IFS=$'\n\t'

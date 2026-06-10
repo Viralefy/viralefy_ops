@@ -3,8 +3,16 @@
 #
 # Ordem importa: payments + sender são deps do viralefy-api (orchestrator).
 # Sobem primeiro, espera /internal/health, só depois sobe o api e os fronts.
+#
+# Migrations rodam ANTES de qualquer serviço subir (descoberta do DR drill
+# 2026-06-10): viralefy-auth assert schema de `refresh_tokens` no startup;
+# essa tabela vive nas migrations 039_auth_tokens / 040_proof_storage_key
+# que pertencem ao viralefy_core. Sem `viralefy-core migrate up`, auth
+# entra em crash loop. Ordem: api → core (PHASE-9, se presente) → services.
 
 install_start() {
+  run_migrations
+
   log "habilitando e subindo microservices (payments, sender)"
   systemctl enable --now viralefy-payments viralefy-sender
 
@@ -16,6 +24,34 @@ install_start() {
   # Timer do backup do Postgres — diário 03:00 UTC. enable+now agenda imediato.
   systemctl enable --now viralefy-backup.timer
   wait_healthy
+}
+
+# Migrations sequencing (DR drill 2026-06-10):
+#   1. viralefy-api migrate up   → migrations 001..038 (legacy schema)
+#   2. viralefy-core migrate up  → migrations 039_auth_tokens, 040_proof_storage_key
+#
+# core migrate é PRECONDIÇÃO de viralefy-auth (refresh_tokens assert).
+# Idempotente: migrate up é no-op se já aplicado. Falha hard se api migrate
+# falhar (schema base); falha hard em core SOMENTE se o binário existir
+# (PHASE-9 pode estar desabilitado em hosts < phase-9-ready).
+run_migrations() {
+  local api_bin="${ROOT_DIR}/api/bin/viralefy-api"
+  if [[ -x "$api_bin" ]]; then
+    log "viralefy-api migrate up (legacy migrations 001..038)"
+    run_as viralefy-api bash -c "set -a; source '$ENV_FILE'; set +a; '$api_bin' migrate up" \
+      || fatal "viralefy-api migrate up falhou — abortando start"
+  else
+    warn "viralefy-api binário ausente em $api_bin — pulando migrate"
+  fi
+
+  local core_bin=/usr/local/sbin/viralefy-core
+  if [[ -x "$core_bin" ]]; then
+    log "viralefy-core migrate up (PHASE-9 migrations 039/040 — precondição de viralefy-auth)"
+    run_as viralefy-core bash -c "set -a; source '$ENV_FILE'; set +a; '$core_bin' migrate up" \
+      || fatal "viralefy-core migrate up falhou — viralefy-auth não vai subir sem refresh_tokens"
+  else
+    info "viralefy-core ausente — pulando migrate PHASE-9 (host < phase-9-ready)"
+  fi
 }
 
 # Espera /internal/health do microservice responder 200 antes de prosseguir.
