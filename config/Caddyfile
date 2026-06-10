@@ -144,6 +144,7 @@ www.{$DOMAIN_FRONT} {
 		directives `
 			Include /etc/caddy/coraza/coraza.conf
 			Include /etc/caddy/coraza/crs/crs-setup.conf
+			Include /etc/caddy/coraza/coraza-crs-exclusions.conf
 			Include /etc/caddy/coraza/crs/rules/*.conf
 		`
 	}
