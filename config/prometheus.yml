@@ -99,6 +99,16 @@ scrape_configs:
         labels:
           service: caddy
 
+  # Postgres exporter (prometheus-community/postgres_exporter), instalado
+  # via installer/80-observability.sh. Roda como user postgres, lê o DSN
+  # do EnvironmentFile /etc/viralefy/postgres-exporter.env.
+  - job_name: postgres-exporter
+    metrics_path: /metrics
+    static_configs:
+      - targets: [127.0.0.1:9187]
+        labels:
+          service: postgres-exporter
+
   # TODO(PHASE-9): expor /metrics nos serviços abaixo. Hoje retornam 404
   # em /metrics, /internal/metrics e /internal/v1/metrics — descobrir o
   # mux Prometheus correto (ou montar promhttp) antes de habilitar o scrape.
@@ -106,6 +116,3 @@ scrape_configs:
   # - job_name: viralefy-auth      (127.0.0.1:8083)  -> sem handler de métricas
   # - job_name: viralefy-payments  (127.0.0.1:8081)  -> sem handler de métricas
   # - job_name: viralefy-sender    (127.0.0.1:8082)  -> sem handler de métricas
-  #
-  # TODO(ops): instalar postgres_exporter (porta padrão 9187) e habilitar
-  # o job 'postgres-exporter'. Hoje a porta não está ouvindo.

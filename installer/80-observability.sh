@@ -25,6 +25,7 @@ install_observability() {
   install_obs_tempo_binary
   install_obs_users_dirs
   install_obs_configs
+  install_obs_postgres_exporter
   install_obs_systemd
   start_obs_services
 }
@@ -47,7 +48,7 @@ install_obs_apt_repos() {
 
 # ---- Pacotes apt (Grafana, Alloy, Prometheus, node_exporter) ---- #
 install_obs_packages() {
-  local pkgs=(grafana alloy prometheus prometheus-node-exporter)
+  local pkgs=(grafana alloy prometheus prometheus-node-exporter prometheus-postgres-exporter)
   log "apt-get install -y ${pkgs[*]}"
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${pkgs[@]}" >/dev/null
 
@@ -55,9 +56,11 @@ install_obs_packages() {
   # (Prometheus e node_exporter no Debian já vêm com unit padrão; substituiremos.)
   systemctl stop prometheus 2>/dev/null || true
   systemctl stop prometheus-node-exporter 2>/dev/null || true
+  systemctl stop prometheus-postgres-exporter 2>/dev/null || true
   systemctl stop grafana-server 2>/dev/null || true
   systemctl stop alloy 2>/dev/null || true
   systemctl disable prometheus-node-exporter 2>/dev/null || true
+  systemctl disable prometheus-postgres-exporter 2>/dev/null || true
 }
 
 # ---- Loki binary (upstream tarball) ---- #
@@ -153,11 +156,67 @@ install_obs_configs() {
   info "configs de observabilidade em /etc/{grafana,loki,tempo,prometheus,alloy}"
 }
 
+# ---- Postgres exporter (role + env + symlink binary) ---- #
+# Idempotente: cria/atualiza role postgres_exporter no banco viralefy,
+# materializa /etc/viralefy/postgres-exporter.env com DSN loopback, e
+# expõe o binário em /usr/local/bin/postgres_exporter (symlink). A unit
+# em si entra via install_obs_systemd; start vem em start_obs_services.
+install_obs_postgres_exporter() {
+  log "configurando prometheus-postgres-exporter"
+
+  # Symlink pro caminho canônico usado pela unit /etc/systemd/.../postgres-exporter.service.
+  if [[ -x /usr/bin/prometheus-postgres-exporter ]]; then
+    ln -sf /usr/bin/prometheus-postgres-exporter /usr/local/bin/postgres_exporter
+  else
+    fatal "prometheus-postgres-exporter não encontrado em /usr/bin (apt install falhou?)"
+  fi
+
+  # Gera/preserva o secret. Se o env file já existe, reusa a senha pra
+  # não invalidar uma role já em uso.
+  local env_file=/etc/viralefy/postgres-exporter.env
+  local pass
+  install -d -m 0755 -o root -g root /etc/viralefy
+  if [[ -f "$env_file" ]] && grep -q '^DATA_SOURCE_NAME=' "$env_file"; then
+    pass="$(sed -n 's#^DATA_SOURCE_NAME=postgresql://postgres_exporter:\([^@]*\)@.*#\1#p' "$env_file")"
+  fi
+  if [[ -z "${pass:-}" ]]; then
+    pass="$(openssl rand -hex 16)"
+  fi
+
+  # Cria/atualiza role read-only (pg_monitor) no banco viralefy.
+  sudo -u postgres psql -v ON_ERROR_STOP=1 -d viralefy <<-SQL
+		DO \$\$
+		BEGIN
+		  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'postgres_exporter') THEN
+		    CREATE USER postgres_exporter PASSWORD '${pass}';
+		  ELSE
+		    ALTER USER postgres_exporter PASSWORD '${pass}';
+		  END IF;
+		END
+		\$\$;
+		ALTER USER postgres_exporter SET SEARCH_PATH TO postgres_exporter,pg_catalog;
+		GRANT pg_monitor TO postgres_exporter;
+		GRANT CONNECT ON DATABASE viralefy TO postgres_exporter;
+	SQL
+
+  # Materializa env file (DSN loopback). chmod 600, owner postgres pois
+  # a unit roda como user postgres e precisa ler o file via EnvironmentFile.
+  umask 077
+  cat > "$env_file" <<-EOF
+		DATA_SOURCE_NAME=postgresql://postgres_exporter:${pass}@127.0.0.1:5432/viralefy?sslmode=disable
+		PG_EXPORTER_DISABLE_DEFAULT_METRICS=false
+		PG_EXPORTER_DISABLE_SETTINGS_METRICS=false
+	EOF
+  chown postgres:postgres "$env_file"
+  chmod 0600 "$env_file"
+  info "postgres-exporter env em $env_file (modo 600, owner postgres)"
+}
+
 # ---- Systemd units (hardened, do repo ops) ---- #
 install_obs_systemd() {
   local ops; ops="$(dir_of ops)"
   local src="$ops/systemd"
-  for unit in grafana-server loki tempo prometheus alloy node-exporter; do
+  for unit in grafana-server loki tempo prometheus alloy node-exporter postgres-exporter; do
     install -m 0644 -o root -g root "$src/$unit.service" "/etc/systemd/system/$unit.service"
   done
 
@@ -176,7 +235,7 @@ EOF
 # ---- Enable + start + healthcheck ---- #
 start_obs_services() {
   log "habilitando e subindo serviços de observabilidade"
-  systemctl enable --now node-exporter loki tempo prometheus alloy grafana-server
+  systemctl enable --now node-exporter loki tempo prometheus alloy grafana-server postgres-exporter
 
   # Healthcheck rápido: cada porta loopback deve responder em até 30s.
   local checks=(
@@ -186,6 +245,7 @@ start_obs_services() {
     "Grafana|3030|/api/health"
     "Alloy|12345|/-/ready"
     "node_exporter|9100|/metrics"
+    "postgres-exporter|9187|/metrics"
   )
   local entry name port path
   for entry in "${checks[@]}"; do
