@@ -246,6 +246,18 @@ www.{$DOMAIN_FRONT} {
 		}
 	}
 
+	# ---- PHASE-9 Bucket 2 (a+b) — área logada do usuário via dispatcher ---- #
+	# /v1/me/* (GET + POST + PUT + DELETE) — 38 rotas. Parity pré-swap: 401
+	# sem Bearer em ambos legacy e dispatcher, body shape idêntico (só
+	# trace_id varia). Dual-sign já existe em legacy → tokens RS256 emitidos
+	# por auth/core/legacy são interchangeable, sem auth chain break.
+	# DB compartilhado → mutações idempotentes mesmo se path alternar.
+	handle /v1/me* {
+		reverse_proxy 127.0.0.1:8090 {
+			header_up X-Real-IP {http.request.remote.host}
+		}
+	}
+
 	# Default — tudo que não bateu nos handle_path acima vai pro monolito.
 	reverse_proxy 127.0.0.1:8080 {
 		header_up X-Real-IP {http.request.remote.host}
