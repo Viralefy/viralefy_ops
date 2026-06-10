@@ -12,6 +12,26 @@
 	order coraza_waf first
 }
 
+# ---------------- Catch-all pra Host headers desconhecidos (pentest #4) ---------------- #
+# Pentest 2026-06-10 finding #4: `curl -H "Host: evil.example.com"` em /healthz
+# devolvia 200. Caddy roteia por Host; quando HTTP/2 reusa conexão TLS de um
+# domínio válido, Caddy v2 pode dispatch ao primeiro site block. Defesa:
+# bloco wildcard explícito que responde 421 Misdirected Request pra qualquer
+# Host que não bata em um dos vhosts explícitos abaixo. RFC 7540 §9.1.2 é o
+# status correto. O TLS handshake usa cert interno (Caddy internal) pra Host
+# desconhecido — atacante vê cert mismatch antes do request.
+:443 {
+	tls internal
+	respond "Misdirected Request" 421 {
+		close
+	}
+}
+:80 {
+	respond "Misdirected Request" 421 {
+		close
+	}
+}
+
 # ---------------- apex → www (canônico flipped) ---------------- #
 # A loja é canônica em www.viralefy.com. Apex viralefy.com redireciona 301
 # preservando path/query — bookmarks e backlinks históricos continuam vivos.
@@ -45,6 +65,13 @@ www.{$DOMAIN_FRONT} {
 		# não duplicamos via X-Robots-Tag aqui (override no Caddy não tava
 		# pegando consistentemente).
 		X-Robots-Tag "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
+		# Pentest #7: Cross-Origin-Resource-Policy isola este recurso de leitura
+		# cross-origin opaca (Spectre-class). same-site permite cdn.viralefy.com
+		# e api.viralefy.com, bloqueia eTLD+1 estrangeiro.
+		# COEP `require-corp` ficou DEFERIDO — quebraria GTM/Turnstile/Twemoji
+		# CDNs que não enviam CORP nas suas respostas. Reativar quando
+		# migrarmos GTM pra self-hosted e Turnstile já tiver suporte CORP.
+		Cross-Origin-Resource-Policy "same-site"
 		-Server
 		-X-Powered-By
 	}
@@ -71,6 +98,11 @@ www.{$DOMAIN_FRONT} {
 		Content-Security-Policy "frame-ancestors 'none'"
 		Permissions-Policy "interest-cohort=(), browsing-topics=()"
 		Cross-Origin-Opener-Policy "same-origin"
+		# Pentest #7: backoffice é sistema fechado (sem GTM, sem 3rd-party JS)
+		# então podemos usar require-corp + same-origin sem regressão. Cross-
+		# origin isolated context habilita SharedArrayBuffer e mitiga Spectre.
+		Cross-Origin-Embedder-Policy "require-corp"
+		Cross-Origin-Resource-Policy "same-origin"
 		-Server
 		-X-Powered-By
 	}
@@ -107,6 +139,8 @@ www.{$DOMAIN_FRONT} {
 		X-Frame-Options "DENY"
 		Referrer-Policy "no-referrer"
 		Cross-Origin-Opener-Policy "same-origin"
+		# Pentest #7: Grafana é sistema fechado interno.
+		Cross-Origin-Resource-Policy "same-origin"
 		-Server
 		-X-Powered-By
 	}
@@ -131,6 +165,10 @@ www.{$DOMAIN_FRONT} {
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin"
 		Cross-Origin-Opener-Policy "same-origin"
+		# Pentest #7: API serve só JSON. same-site permite www.viralefy.com
+		# (mesmo eTLD+1) acessar via fetch com CORS; bloqueia cross-origin
+		# leakage de respostas pra contextos hostis.
+		Cross-Origin-Resource-Policy "same-site"
 		-Server
 		-X-Powered-By
 	}
