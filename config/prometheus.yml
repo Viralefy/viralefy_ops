@@ -109,10 +109,27 @@ scrape_configs:
         labels:
           service: postgres-exporter
 
-  # TODO(PHASE-9): expor /metrics nos serviços abaixo. Hoje retornam 404
-  # em /metrics, /internal/metrics e /internal/v1/metrics — descobrir o
-  # mux Prometheus correto (ou montar promhttp) antes de habilitar o scrape.
-  #
-  # - job_name: viralefy-auth      (127.0.0.1:8083)  -> sem handler de métricas
-  # - job_name: viralefy-payments  (127.0.0.1:8081)  -> sem handler de métricas
-  # - job_name: viralefy-sender    (127.0.0.1:8082)  -> sem handler de métricas
+  # /internal/metrics expostos pelos 3 microservices via promhttp (loopback-only).
+  # Mesma nomenclatura de métricas do viralefy-core (http_requests_total,
+  # http_request_duration_seconds, db_query_duration_seconds) — dashboards
+  # do core funcionam filtrando por label `service`.
+  - job_name: viralefy-auth
+    metrics_path: /internal/metrics
+    static_configs:
+      - targets: [127.0.0.1:8083]
+        labels:
+          service: viralefy-auth
+
+  - job_name: viralefy-payments
+    metrics_path: /internal/metrics
+    static_configs:
+      - targets: [127.0.0.1:8081]
+        labels:
+          service: viralefy-payments
+
+  - job_name: viralefy-sender
+    metrics_path: /internal/metrics
+    static_configs:
+      - targets: [127.0.0.1:8082]
+        labels:
+          service: viralefy-sender
