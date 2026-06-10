@@ -258,6 +258,18 @@ www.{$DOMAIN_FRONT} {
 		}
 	}
 
+	# ---- PHASE-9 Bucket 3 — admin via dispatcher ---- #
+	# /v1/admin/* (52+ rotas com RBAC permissions) → dispatcher → core.
+	# Core é fork 1:1 do legacy, mesma RBAC, mesma adminAuth middleware,
+	# mesmo DB. Tokens admin são dual-signed (RS256+HS256) → interchangeable.
+	# Parity pré-swap: 12 rotas testadas, 401 sem Bearer em ambos paths,
+	# bodies idênticos exceto trace_id. Risco baixo (mesma surface, mesmo DB).
+	handle /v1/admin* {
+		reverse_proxy 127.0.0.1:8090 {
+			header_up X-Real-IP {http.request.remote.host}
+		}
+	}
+
 	# Default — tudo que não bateu nos handle_path acima vai pro monolito.
 	reverse_proxy 127.0.0.1:8080 {
 		header_up X-Real-IP {http.request.remote.host}
