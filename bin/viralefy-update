@@ -26,9 +26,34 @@ ROOT_DIR=/viralefy
 NEXT_DIR=/viralefy.next
 PREV_DIR=/viralefy.prev
 ENV_FILE=/etc/viralefy/.env
+LEGACY_MARKER=/etc/viralefy/.legacy-deprecated
 ORG="${VIRALEFY_GH_ORG:-Viralefy}"
 REPO_BASE="${VIRALEFY_REPO_BASE:-https://github.com/$ORG}"
 BRANCH="${VIRALEFY_BRANCH:-main}"
+
+# --include-legacy: força build+deploy do viralefy-api mesmo com marker
+# $LEGACY_MARKER presente. Sem essa flag, se o marker existir, o api é
+# clonado mas NÃO buildado nem deployado (cutover PHASE-9 em soak).
+INCLUDE_LEGACY=0
+ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --include-legacy) INCLUDE_LEGACY=1 ;;
+    *) ARGS+=("$arg") ;;
+  esac
+done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
+
+# SKIP_API=1 quando marker existe e operador não passou --include-legacy.
+# O clone do viralefy_api continua acontecendo (pra source ficar atualizado
+# em /viralefy/api e commits visíveis), mas:
+#   - build_api é skipado
+#   - systemctl stop/start de viralefy-api é skipado
+#   - healthcheck da porta 8080 (api) é skipado
+SKIP_API=0
+if [[ -f "$LEGACY_MARKER" && $INCLUDE_LEGACY -eq 0 ]]; then
+  SKIP_API=1
+fi
 
 [[ $EUID -eq 0 ]] || { echo "Precisa rodar como root."; exit 1; }
 
@@ -54,6 +79,12 @@ fi
 
 ts() { date -u +"%H:%M:%S"; }
 log() { echo "[$(ts)] $*"; }
+
+if [[ $SKIP_API -eq 1 ]]; then
+  log "MODO LEGACY-SKIP: marker $LEGACY_MARKER existe — viralefy-api não será buildado nem deployado (use --include-legacy pra forçar)."
+elif [[ $INCLUDE_LEGACY -eq 1 ]]; then
+  log "--include-legacy: forçando build+deploy de viralefy-api mesmo com marker presente."
+fi
 
 log "limpando staging anterior"
 rm -rf "$NEXT_DIR" "$PREV_DIR"
@@ -141,8 +172,13 @@ build_rust_svc() {
     bash -c "cd '$d' && cargo build --release 2>&1 && cp -f target/release/$bin bin/$bin"
 }
 
-build_api > /tmp/build-api.log 2>&1 &
-PID_API=$!
+PID_API=""
+if [[ $SKIP_API -eq 1 ]]; then
+  log "viralefy-api: LEGACY em soak (marker $LEGACY_MARKER existe). Skip build. Clone preservado."
+else
+  build_api > /tmp/build-api.log 2>&1 &
+  PID_API=$!
+fi
 build_go_svc payments cmd/payments > /tmp/build-payments.log 2>&1 &
 PID_PAY=$!
 build_go_svc sender cmd/sender > /tmp/build-sender.log 2>&1 &
@@ -170,7 +206,9 @@ fi
 
 # Espera + checa exit codes (paralelismo seguro)
 FAIL=0
-wait $PID_API || { echo "FALHA build API"; tail -30 /tmp/build-api.log; FAIL=1; }
+if [[ -n "$PID_API" ]]; then
+  wait $PID_API || { echo "FALHA build API"; tail -30 /tmp/build-api.log; FAIL=1; }
+fi
 wait $PID_PAY || { echo "FALHA build payments"; tail -30 /tmp/build-payments.log; FAIL=1; }
 wait $PID_SND || { echo "FALHA build sender"; tail -30 /tmp/build-sender.log; FAIL=1; }
 wait $PID_FRONT || { echo "FALHA build front"; tail -30 /tmp/build-front.log; FAIL=1; }
@@ -199,8 +237,15 @@ log "builds ok — preparando swap"
 log "swap: stop → mv → start"
 
 # Ordem de stop: api primeiro (depende dos microservices), depois os deps.
-systemctl stop viralefy-api viralefy-front viralefy-backoffice \
-               viralefy-payments viralefy-sender 2>/dev/null || true
+# Quando SKIP_API=1 (PHASE-9 cutover em soak), viralefy-api já está stopped
+# + disabled — não mexer pra não re-introduzir o serviço no journal.
+if [[ $SKIP_API -eq 1 ]]; then
+  systemctl stop viralefy-front viralefy-backoffice \
+                 viralefy-payments viralefy-sender 2>/dev/null || true
+else
+  systemctl stop viralefy-api viralefy-front viralefy-backoffice \
+                 viralefy-payments viralefy-sender 2>/dev/null || true
+fi
 
 # Salva ops anterior pra rollback caso healthcheck falhe.
 if [[ -d $ROOT_DIR ]]; then
@@ -240,28 +285,55 @@ if [[ -f "$ROOT_DIR/ops/config/Caddyfile" ]]; then
   fi
 fi
 
+# Migrations ANTES de subir qualquer serviço (DR drill 2026-06-10):
+#   - viralefy-api migrate up      → schema legacy (001..038)
+#   - viralefy-core migrate up     → 039_auth_tokens, 040_proof_storage_key
+# refresh_tokens (em 039) é precondição de viralefy-auth subir. Sem isso,
+# auth crasha no schema assert e o cutover PHASE-9 falha.
+# Idempotente; falha hard em api migrate; tolerante a core ausente (legacy host).
+log "migrations: api → core (precondição do auth)"
+if [[ -x /viralefy/api/bin/viralefy-api ]]; then
+  sudo -u viralefy-api bash -c "set -a; source '$ENV_FILE'; set +a; /viralefy/api/bin/viralefy-api migrate up" \
+    || { echo "[fatal] viralefy-api migrate up falhou"; exit 1; }
+fi
+if [[ -x /usr/local/sbin/viralefy-core ]]; then
+  sudo -u viralefy-core bash -c "set -a; source '$ENV_FILE'; set +a; /usr/local/sbin/viralefy-core migrate up" \
+    || { echo "[fatal] viralefy-core migrate up falhou — auth não vai subir"; exit 1; }
+fi
+
 # Microservices primeiro (deps do api).
 systemctl start viralefy-payments viralefy-sender
-systemctl start viralefy-api viralefy-front viralefy-backoffice
+if [[ $SKIP_API -eq 1 ]]; then
+  log "skip start viralefy-api (marker $LEGACY_MARKER presente)"
+  systemctl start viralefy-front viralefy-backoffice
+else
+  systemctl start viralefy-api viralefy-front viralefy-backoffice
+fi
 
 # ---------- Healthcheck + rollback ---------- #
 log "aguardando healthcheck (max 30s)"
 HEALTHY=0
 for i in $(seq 1 30); do
-  if curl -fsS http://127.0.0.1:8081/internal/health >/dev/null 2>&1 \
-     && curl -fsS http://127.0.0.1:8082/internal/health >/dev/null 2>&1 \
-     && curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1 \
-     && curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1; then
-    HEALTHY=1
-    break
+  ok=1
+  curl -fsS http://127.0.0.1:8081/internal/health >/dev/null 2>&1 || ok=0
+  curl -fsS http://127.0.0.1:8082/internal/health >/dev/null 2>&1 || ok=0
+  if [[ $SKIP_API -eq 0 ]]; then
+    curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1 || ok=0
   fi
+  curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1 || ok=0
+  if [[ $ok -eq 1 ]]; then HEALTHY=1; break; fi
   sleep 1
 done
 
 if [[ $HEALTHY -eq 0 ]]; then
   echo "healthcheck falhou — fazendo rollback"
-  systemctl stop viralefy-api viralefy-front viralefy-backoffice \
-                 viralefy-payments viralefy-sender
+  if [[ $SKIP_API -eq 1 ]]; then
+    systemctl stop viralefy-front viralefy-backoffice \
+                   viralefy-payments viralefy-sender
+  else
+    systemctl stop viralefy-api viralefy-front viralefy-backoffice \
+                   viralefy-payments viralefy-sender
+  fi
   rm -rf "$ROOT_DIR"
   mv "$PREV_DIR" "$ROOT_DIR"
   # Restaura binários antigos dos microservices se existirem.
@@ -273,7 +345,11 @@ if [[ $HEALTHY -eq 0 ]]; then
   done
   systemctl daemon-reload
   systemctl start viralefy-payments viralefy-sender
-  systemctl start viralefy-api viralefy-front viralefy-backoffice
+  if [[ $SKIP_API -eq 1 ]]; then
+    systemctl start viralefy-front viralefy-backoffice
+  else
+    systemctl start viralefy-api viralefy-front viralefy-backoffice
+  fi
   echo "rollback completo. Logs do build em /tmp/build-*.log."
   exit 1
 fi
