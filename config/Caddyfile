@@ -7,6 +7,9 @@
 	servers {
 		trusted_proxies static private_ranges
 	}
+	# Ordem de directives — coraza_waf precisa rodar ANTES do reverse_proxy.
+	# Sem isso, requests passam pro upstream antes do WAF inspecionar.
+	order coraza_waf first
 }
 
 # ---------------- apex → www (canônico flipped) ---------------- #
@@ -118,6 +121,31 @@ www.{$DOMAIN_FRONT} {
 		Cross-Origin-Opener-Policy "same-origin"
 		-Server
 		-X-Powered-By
+	}
+
+	# ---- Coraza WAF — OWASP CRS 4.x ---- #
+	# PHASE-9 §3.1. Defesa em profundidade contra XSS, SQLi, path traversal,
+	# command injection antes de qualquer roteamento pros services Go.
+	#
+	# Modo inicial: DetectionOnly (audit em /var/log/caddy-waf/audit.log,
+	# não bloqueia ainda). Janela mínima de 14 dias coletando false positives
+	# antes de mudar pra Block. Tuning de exceções fica em CRS_EXCLUSION_*
+	# config no crs-setup.conf.
+	#
+	# Limites cobertos pelo CRS (NÃO substitui validação de domínio):
+	#   - SQLi (rules 942xxx)
+	#   - XSS (rules 941xxx)
+	#   - LFI/path traversal (rules 930xxx, 932xxx)
+	#   - RCE (rules 932xxx)
+	#   - HTTP protocol violations (920xxx)
+	# NÃO cobre IDOR/BOLA, mass-assignment, business logic — esses ficam
+	# em viralefy_core/middlewares (vide PHASE-9-ARCHITECTURE §3.2).
+	coraza_waf {
+		directives `
+			Include /etc/caddy/coraza/coraza.conf
+			Include /etc/caddy/coraza/crs/crs-setup.conf
+			Include /etc/caddy/coraza/crs/rules/*.conf
+		`
 	}
 
 	# /health e /ready continuam públicos (necessários p/ load balancers).
