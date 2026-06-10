@@ -30,12 +30,8 @@ scrape_configs:
         labels:
           host: viralefy
 
-  - job_name: viralefy-api
-    metrics_path: /metrics
-    static_configs:
-      - targets: [127.0.0.1:8080]
-        labels:
-          service: viralefy-api
+  # viralefy-api LEGACY parada em soak (PHASE-9). Reativar removendo este comentário.
+  # (era job_name: viralefy-api, targets [127.0.0.1:8080], service=viralefy-api)
 
   - job_name: viralefy-front
     metrics_path: /api/metrics
