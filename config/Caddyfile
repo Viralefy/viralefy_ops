@@ -75,6 +75,18 @@ www.{$DOMAIN_FRONT} {
 		-X-Powered-By
 	}
 
+	# /api/metrics é o endpoint Prometheus do backoffice (raspado em loopback
+	# por prometheus em 127.0.0.1:9090, vide viralefy_ops/config/prometheus.yml).
+	# Externamente NUNCA pode vazar — métricas de processo dão fingerprinting
+	# (uptime, RSS, GC patterns) e a cardinalidade de http_requests_total
+	# expõe rotas internas. Retornamos 404 (não 403) pra não revelar a rota.
+	@backoffice_metrics path /api/metrics
+	handle @backoffice_metrics {
+		respond "Not Found" 404 {
+			close
+		}
+	}
+
 	reverse_proxy 127.0.0.1:3001 {
 		header_up X-Real-IP {http.request.remote.host}
 	}
