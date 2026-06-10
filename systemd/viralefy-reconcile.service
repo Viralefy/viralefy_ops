@@ -1,0 +1,51 @@
+[Unit]
+Description=Viralefy — reconcile cron (drift monitoring de invariantes do negócio)
+Documentation=https://github.com/Viralefy/viralefy_ops
+Wants=network-online.target postgresql.service
+After=network-online.target postgresql.service
+
+[Service]
+Type=oneshot
+# DATABASE_URL e ADMIN_WEBHOOK_URL vêm do .env compartilhado da app.
+EnvironmentFile=/etc/viralefy/.env
+ExecStart=/usr/local/sbin/viralefy-reconcile
+User=viralefy-core
+Group=viralefy
+
+# Falha sai com 1 (drift detectado) ou 2 (erro infra). Em ambos, journal
+# captura stderr + stdout e systemd marca o unit como failed pro alert ops.
+# OnFailure ativa cat pra encaminhar pro journald (default já faz, mas
+# explícito ajuda quem ler systemctl status).
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=10min
+
+# Hardening — só lê DB e (talvez) faz POST HTTP. Sem fs writes, sem caps.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @debug @mount @cpu-emulation @obsolete
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+# Disparado pelo timer, mas pode ser usado standalone (`systemctl start`).
+WantedBy=multi-user.target

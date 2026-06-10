@@ -1,0 +1,15 @@
+[Unit]
+Description=Viralefy — disparador diário do reconcile cron
+Documentation=https://github.com/Viralefy/viralefy_ops
+
+[Timer]
+# 03:00 UTC todo dia. Roda DEPOIS do backup (03:00 também, com 30min jitter)
+# — ordem não é crítica porque reconcile é read-only, mas convencionalmente
+# o backup precede o relatório.
+OnCalendar=*-*-* 03:30:00 UTC
+RandomizedDelaySec=15min
+Persistent=true
+Unit=viralefy-reconcile.service
+
+[Install]
+WantedBy=timers.target
