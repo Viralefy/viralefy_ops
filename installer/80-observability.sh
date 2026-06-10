@@ -121,7 +121,15 @@ install_obs_users_dirs() {
   install -d -m 0750 -o grafana    -g grafana    /var/lib/grafana
   install -d -m 0750 -o loki       -g loki       /var/lib/loki
   install -d -m 0750 -o tempo      -g tempo      /var/lib/tempo
-  install -d -m 0750 -o prometheus -g prometheus /var/lib/prometheus
+  # /var/lib/prometheus precisa ser 0755 (não 0750): viralefy-backup e
+  # viralefy-backup-verify rodam como root MAS com CapabilityBoundingSet=""
+  # (hardening systemd), perdendo CAP_DAC_READ_SEARCH. Sem +x no parent,
+  # o stat de /var/lib/prometheus/node_exporter falha com EACCES. Dados do
+  # TSDB ficam em subdirs com perms próprias, então abrir +x no parent é seguro.
+  install -d -m 0755 -o prometheus -g prometheus /var/lib/prometheus
+  # Textfile collector usado pelos timers de backup/verify/drill — root grava
+  # métricas aqui via mv atômico. node_exporter lê com perms herdadas.
+  install -d -m 0755 -o root       -g root       /var/lib/prometheus/node_exporter
   install -d -m 0750 -o alloy      -g alloy      /var/lib/alloy
 
   install -d -m 0755 -o root -g root /etc/grafana

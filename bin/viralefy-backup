@@ -37,7 +37,12 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
 fi
 
 install -d -m 0700 -o root -g root "$BACKUP_DIR"
-install -d -m 0755 -o root -g root "$TEXTFILE_DIR"
+# ProtectSystem=strict + CapabilityBoundingSet="" + parent
+# /var/lib/prometheus (mode 0750 prometheus:prometheus) → root sem CAP_DAC
+# não consegue stat/list o parent. NÃO tentamos `[[ -d $TEXTFILE_DIR ]]`
+# nem `install -d` no leaf — a precondição é que o installer já criou o
+# diretório (ver 80-observability.sh / 60-systemd.sh). Caso falte, o
+# write na linha do `mv` abaixo falha barulhento.
 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="$BACKUP_DIR/dump-$TS.sql.gz"
@@ -106,7 +111,10 @@ SIZE=$(stat -c%s "$OUT")
 NOW=$(date -u +%s)
 COUNT=$(ls -1 dump-*.sql.gz 2>/dev/null | wc -l)
 
-cat > "$TEXTFILE.tmp" <<METRICS
+# Escrita do textfile é best-effort: dump já está safe no disco, falha aqui
+# é métrica perdida (não dado perdido). Não derruba o backup.
+{
+  cat > "$TEXTFILE.tmp" <<METRICS && mv -f "$TEXTFILE.tmp" "$TEXTFILE" && chmod 0644 "$TEXTFILE"
 # HELP viralefy_backup_last_success_timestamp Unix epoch do último backup bem-sucedido.
 # TYPE viralefy_backup_last_success_timestamp gauge
 viralefy_backup_last_success_timestamp $NOW
@@ -117,7 +125,6 @@ viralefy_backup_last_size_bytes $SIZE
 # TYPE viralefy_backup_count_total gauge
 viralefy_backup_count_total $COUNT
 METRICS
-mv -f "$TEXTFILE.tmp" "$TEXTFILE"
-chmod 0644 "$TEXTFILE"
+} || echo "[backup] warn: falha ao gravar textfile $TEXTFILE (dump foi salvo ok)" >&2
 
 echo "[backup] ok size=$SIZE bytes count=$COUNT"

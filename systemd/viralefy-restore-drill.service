@@ -1,0 +1,28 @@
+[Unit]
+Description=Viralefy — restore drill (sandbox docker postgres) do último dump
+Documentation=https://github.com/Viralefy/viralefy_ops
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/viralefy-restore-drill
+User=root
+Group=root
+# Drill precisa de docker (controla containers via /var/run/docker.sock) e
+# de psql contra prod read-only. ProtectSystem=full em vez de strict pra
+# liberar libs Docker; ainda assim escrita só nos paths declarados.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ReadOnlyPaths=/var/backups/viralefy /etc/viralefy
+ReadWritePaths=/var/lib/prometheus/node_exporter /var/run/docker.sock /tmp /var/lib/docker
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+TimeoutStartSec=10min
+SyslogIdentifier=viralefy-restore-drill

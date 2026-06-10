@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+# viralefy-restore-drill — restaura o dump mais recente em postgres sandbox
+# (container docker isolado) e valida estrutura + smoke queries.
+#
+# Por que existe: backups que nunca foram restaurados são esperança, não
+# garantia. Esse script prova periodicamente que o último dump É restaurável,
+# bate counts com produção e responde queries representativas dentro do SLO.
+#
+# Não toca em prod: roda em container postgres efêmero numa porta livre
+# (15433+), com volume tmpfs, e é destruído ao fim (trap EXIT).
+#
+# Roda como root via systemd timer (weekly Sunday 05:00 UTC).
+# Saída: 1 linha JSON em stdout + métricas Prometheus textfile.
+# Exit 0 = drill verde; 1 = qualquer falha (e métrica indicará via _ok=0).
+
+set -euo pipefail
+IFS=$'\n\t'
+
+BACKUP_DIR=/var/backups/viralefy
+ENV_FILE=/etc/viralefy/.env
+TEXTFILE_DIR=/var/lib/prometheus/node_exporter
+TEXTFILE=$TEXTFILE_DIR/viralefy_restore_drill.prom
+PG_IMAGE=${PG_IMAGE:-postgres:17-alpine}
+# SLO inclui o overhead de psql (TCP + auth + parse) — não é p99 da query
+# pura. ~80-120ms é piso esperado em sandbox. Limite 250ms detecta degradação
+# real (índice quebrado, dump corrompido parcial) sem false-positive de cold
+# connection. Pra medir SLO real de query, use EXPLAIN ANALYZE em smoke
+# dedicado fora do drill.
+SLO_QUERY_MS=${SLO_QUERY_MS:-250}
+# Tolerância de divergência row-count vs prod (drill roda DEPOIS do backup,
+# então prod pode ter avançado). Default: ±5% por tabela.
+ROWCOUNT_TOLERANCE=${ROWCOUNT_TOLERANCE:-0.05}
+
+[[ $EUID -eq 0 ]] || { echo "Precisa rodar como root." >&2; exit 1; }
+command -v docker >/dev/null || { echo "docker ausente." >&2; exit 1; }
+[[ -r $ENV_FILE ]] || { echo "$ENV_FILE inacessível." >&2; exit 1; }
+
+# shellcheck disable=SC1090
+set -a; source "$ENV_FILE"; set +a
+PROD_URL="${DATABASE_URL:-}"
+[[ -n $PROD_URL ]] || { echo "DATABASE_URL ausente." >&2; exit 1; }
+
+# Pega o dump mais recente.
+LATEST=$(ls -1 "$BACKUP_DIR"/dump-*.sql.gz 2>/dev/null | sort -r | head -1 || true)
+if [[ -z $LATEST ]]; then
+  echo '{"ok":false,"reason":"no_dump_available"}'
+  exit 1
+fi
+
+# Porta livre acima de 15433 (evita 15432 que pode estar em uso por dev).
+pick_free_port() {
+  local p
+  for p in 15433 15434 15435 15436 15437; do
+    ss -tln "sport = :$p" 2>/dev/null | grep -q ":$p" || { echo "$p"; return 0; }
+  done
+  echo "0"; return 1
+}
+SBX_PORT=$(pick_free_port)
+[[ $SBX_PORT == 0 ]] && { echo "nenhuma porta sandbox livre" >&2; exit 1; }
+
+SBX_NAME="viralefy-restore-drill-$$"
+SBX_PASS=$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 24)
+START_EPOCH=$(date +%s)
+
+cleanup() {
+  docker rm -f "$SBX_NAME" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT INT TERM
+
+# Sobe sandbox postgres.
+docker run -d --rm \
+  --name "$SBX_NAME" \
+  -e POSTGRES_PASSWORD="$SBX_PASS" \
+  -e POSTGRES_DB=viralefy_drill \
+  -e POSTGRES_USER=drill \
+  --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid,size=512m \
+  -p "127.0.0.1:$SBX_PORT:5432" \
+  "$PG_IMAGE" >/dev/null
+
+SBX_URL="postgres://drill:$SBX_PASS@127.0.0.1:$SBX_PORT/viralefy_drill?sslmode=disable"
+
+# Aguarda postgres ficar pronto (max 30s).
+ready=false
+for _ in $(seq 1 30); do
+  if docker exec "$SBX_NAME" pg_isready -U drill -d viralefy_drill >/dev/null 2>&1; then
+    ready=true; break
+  fi
+  sleep 1
+done
+$ready || {
+  out=$(printf '{"ok":false,"reason":"sandbox_not_ready","dump":"%s","port":%d}' "$(basename "$LATEST")" "$SBX_PORT")
+  echo "$out"
+  exit 1
+}
+
+# Restore.
+restore_start=$(date +%s)
+restore_err=""
+if ! zcat "$LATEST" | psql "$SBX_URL" -v ON_ERROR_STOP=0 -q >/tmp/drill-restore.log 2>&1; then
+  restore_err="psql_exit_nonzero"
+fi
+restore_end=$(date +%s)
+restore_secs=$((restore_end - restore_start))
+
+# Conta tables/indexes na sandbox.
+sbx_tables=$(psql "$SBX_URL" -tAc \
+  "SELECT count(*) FROM pg_tables WHERE schemaname='public'" 2>/dev/null || echo 0)
+sbx_indexes=$(psql "$SBX_URL" -tAc \
+  "SELECT count(*) FROM pg_indexes WHERE schemaname='public'" 2>/dev/null || echo 0)
+
+# Conta tables em prod (read-only).
+prod_tables=$(psql "$PROD_URL" -tAc \
+  "SELECT count(*) FROM pg_tables WHERE schemaname='public'" 2>/dev/null || echo 0)
+
+# Row counts em 5 tabelas representativas — comparar sandbox vs prod.
+SMOKE_TABLES=(profiles plans orders payment_gateways email_events)
+rowcount_issues=0
+rowcount_details=""
+for t in "${SMOKE_TABLES[@]}"; do
+  p_count=$(psql "$PROD_URL" -tAc "SELECT count(*) FROM $t" 2>/dev/null || echo "-1")
+  s_count=$(psql "$SBX_URL"  -tAc "SELECT count(*) FROM $t" 2>/dev/null || echo "-1")
+  diff_ok=true
+  if [[ $p_count -lt 0 || $s_count -lt 0 ]]; then
+    diff_ok=false
+  elif [[ $p_count -eq 0 && $s_count -eq 0 ]]; then
+    : # both empty, ok
+  elif [[ $p_count -gt 0 ]]; then
+    # |p - s| / p <= tolerance
+    diff_ok=$(awk -v p="$p_count" -v s="$s_count" -v t="$ROWCOUNT_TOLERANCE" \
+      'BEGIN{ d=(p>s)?(p-s):(s-p); print (d/p <= t)?"true":"false" }')
+  fi
+  [[ $diff_ok == true ]] || ((++rowcount_issues))
+  [[ -n $rowcount_details ]] && rowcount_details+=","
+  rowcount_details+=$(printf '{"table":"%s","prod":%s,"sandbox":%s,"ok":%s}' "$t" "$p_count" "$s_count" "$diff_ok")
+done
+
+# Smoke: 5 queries comuns na sandbox, mede tempo (ms).
+SMOKE_QUERIES=(
+  "SELECT count(*) FROM profiles WHERE created_at > now() - interval '30 days'"
+  "SELECT count(*) FROM orders WHERE status='paid'"
+  "SELECT count(*) FROM email_events WHERE received_at > now() - interval '7 days'"
+  "SELECT p.id, p.name FROM plans p JOIN plan_prices pp ON pp.plan_id=p.id LIMIT 50"
+  "SELECT count(*) FROM credit_transactions"
+)
+smoke_max_ms=0
+smoke_issues=0
+smoke_details=""
+for q in "${SMOKE_QUERIES[@]}"; do
+  # \timing parseável: usa EXPLAIN ANALYZE seria mais correto, mas count via
+  # psql -c c/timing dá end-to-end. Aqui usamos time externo.
+  t_start=$(date +%s%N)
+  if psql "$SBX_URL" -tAc "$q" >/dev/null 2>&1; then
+    ok=true
+  else
+    ok=false
+    ((++smoke_issues))
+  fi
+  t_end=$(date +%s%N)
+  ms=$(( (t_end - t_start) / 1000000 ))
+  [[ $ms -gt $smoke_max_ms ]] && smoke_max_ms=$ms
+  if [[ $ms -gt $SLO_QUERY_MS ]]; then
+    ((++smoke_issues))
+    ok=false
+  fi
+  [[ -n $smoke_details ]] && smoke_details+=","
+  # Escapa aspas internas; queries são controladas, sem precisar de jq.
+  q_safe=${q//\"/\\\"}
+  smoke_details+=$(printf '{"query":"%s","ms":%d,"ok":%s}' "$q_safe" "$ms" "$ok")
+done
+
+END_EPOCH=$(date +%s)
+TOTAL_SECS=$((END_EPOCH - START_EPOCH))
+
+# Veredito.
+schema_ok=true
+[[ $sbx_tables -ge 30 ]] || schema_ok=false
+overall_ok=true
+[[ -n $restore_err ]] && overall_ok=false
+$schema_ok || overall_ok=false
+[[ $rowcount_issues -gt 0 ]] && overall_ok=false
+[[ $smoke_issues -gt 0 ]] && overall_ok=false
+
+dump_name=$(basename "$LATEST")
+dump_size=$(stat -c%s "$LATEST")
+
+printf '{"ok":%s,"timestamp":%d,"dump":"%s","dump_size":%d,"sandbox_port":%d,"restore_secs":%d,"total_secs":%d,"schema":{"sandbox_tables":%s,"sandbox_indexes":%s,"prod_tables":%s,"ok":%s},"rowcounts":{"issues":%d,"items":[%s]},"smoke":{"max_ms":%d,"slo_ms":%d,"issues":%d,"items":[%s]},"restore_err":"%s"}\n' \
+  "$overall_ok" "$END_EPOCH" "$dump_name" "$dump_size" "$SBX_PORT" "$restore_secs" "$TOTAL_SECS" \
+  "$sbx_tables" "$sbx_indexes" "$prod_tables" "$schema_ok" \
+  "$rowcount_issues" "$rowcount_details" \
+  "$smoke_max_ms" "$SLO_QUERY_MS" "$smoke_issues" "$smoke_details" \
+  "$restore_err"
+
+# Métricas textfile — best-effort (JSON stdout é a fonte de verdade).
+ok_int=0; [[ $overall_ok == true ]] && ok_int=1
+{
+  cat > "$TEXTFILE.tmp" <<METRICS && mv -f "$TEXTFILE.tmp" "$TEXTFILE" && chmod 0644 "$TEXTFILE"
+# HELP viralefy_restore_drill_last_run_timestamp Unix epoch do último drill.
+# TYPE viralefy_restore_drill_last_run_timestamp gauge
+viralefy_restore_drill_last_run_timestamp $END_EPOCH
+# HELP viralefy_restore_drill_ok 1 se drill passou; 0 caso contrário.
+# TYPE viralefy_restore_drill_ok gauge
+viralefy_restore_drill_ok $ok_int
+# HELP viralefy_restore_drill_duration_seconds Duração total do drill (restore + checks).
+# TYPE viralefy_restore_drill_duration_seconds gauge
+viralefy_restore_drill_duration_seconds $TOTAL_SECS
+# HELP viralefy_restore_drill_restore_seconds Tempo só do pg_restore.
+# TYPE viralefy_restore_drill_restore_seconds gauge
+viralefy_restore_drill_restore_seconds $restore_secs
+# HELP viralefy_restore_drill_smoke_max_ms Pior tempo entre as 5 queries smoke (ms).
+# TYPE viralefy_restore_drill_smoke_max_ms gauge
+viralefy_restore_drill_smoke_max_ms $smoke_max_ms
+METRICS
+} || echo "warn: textfile $TEXTFILE write failed" >&2
+
+if $overall_ok; then exit 0; else exit 1; fi

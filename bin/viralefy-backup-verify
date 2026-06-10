@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# viralefy-backup-verify — sanity check contínua de cada dump em /var/backups/viralefy/.
+#
+# Por que existe: a presença de um .sql.gz no diretório NÃO prova que ele é
+# restaurável. Esse script abre cada arquivo recente, valida integridade gzip,
+# conta statements relevantes do dump e flagga anomalia de tamanho vs vizinho.
+#
+# Saída: 1 linha JSON por execução em stdout + métricas Prometheus textfile.
+# Exit 0 = todos os checks ok; 1 = pelo menos um dump suspeito.
+#
+# Sobre o restore real: esse script NÃO restaura — apenas checa estrutura.
+# Pra restore real automatizado ver viralefy-restore-drill (sandbox docker).
+#
+# Roda como root via systemd timer (daily 04:00 UTC, 1h após backup).
+
+set -euo pipefail
+IFS=$'\n\t'
+
+BACKUP_DIR=/var/backups/viralefy
+TEXTFILE_DIR=/var/lib/prometheus/node_exporter
+TEXTFILE=$TEXTFILE_DIR/viralefy_backup_verify.prom
+# Quantos dumps mais recentes inspecionar a cada run.
+MAX_INSPECT=${MAX_INSPECT:-10}
+# Anomalia de tamanho: > 2x ou < 0.5x o dump anterior (geometric, contra ruído).
+ANOMALY_GROW_RATIO=${ANOMALY_GROW_RATIO:-2.0}
+ANOMALY_SHRINK_RATIO=${ANOMALY_SHRINK_RATIO:-0.5}
+# Mínimo de CREATE TABLE statements pra considerar um dump "schema-completo".
+MIN_TABLES=${MIN_TABLES:-30}
+
+[[ $EUID -eq 0 ]] || { echo "Precisa rodar como root." >&2; exit 1; }
+[[ -d $BACKUP_DIR ]] || { echo "BACKUP_DIR $BACKUP_DIR ausente." >&2; exit 1; }
+
+cd "$BACKUP_DIR"
+
+mapfile -t DUMPS < <(ls -1 dump-*.sql.gz 2>/dev/null | sort -r | head -n "$MAX_INSPECT")
+
+if [[ ${#DUMPS[@]} -eq 0 ]]; then
+  printf '{"ok":false,"reason":"no_dumps_found","checked":0,"issues":1,"items":[]}\n'
+  cat > "$TEXTFILE.tmp" <<'METRICS'
+# HELP viralefy_backup_verify_last_run_timestamp Unix epoch da última execução de verify.
+# TYPE viralefy_backup_verify_last_run_timestamp gauge
+viralefy_backup_verify_last_run_timestamp 0
+# HELP viralefy_backup_verify_ok 1 se zero issues, 0 caso contrário.
+# TYPE viralefy_backup_verify_ok gauge
+viralefy_backup_verify_ok 0
+# HELP viralefy_backup_verify_issues_total Contador de dumps com anomalia/corrupção.
+# TYPE viralefy_backup_verify_issues_total gauge
+viralefy_backup_verify_issues_total 1
+METRICS
+  # Não tentamos `install -d` no parent (/var/lib/prometheus, 0750
+  # prometheus:prometheus): com CapabilityBoundingSet="" o root não tem
+  # CAP_DAC_READ_SEARCH e o stat do parent falha. Precondição: installer
+  # criou $TEXTFILE_DIR como prometheus:prometheus 0755.
+  mv -f "$TEXTFILE.tmp" "$TEXTFILE" 2>/dev/null || true
+  chmod 0644 "$TEXTFILE" 2>/dev/null || true
+  exit 1
+fi
+
+items_json=""
+issues=0
+# `hard_issues` = corrupção real (gzip ruim, schema vazio). Esses fazem o
+# script sair com 1 e systemd marcar OnFailure. Anomalias soft (tamanho
+# crescendo, dump antigo com schema menor) viram métrica + log mas não
+# disparam alerta de serviço — quem decide é o alert manager do Prometheus.
+hard_issues=0
+prev_size=0
+
+# Itera do mais antigo pro mais novo pra comparar size growth coerente.
+for ((i=${#DUMPS[@]}-1; i>=0; i--)); do
+  f=${DUMPS[$i]}
+  reasons=()
+  size=$(stat -c%s "$f" 2>/dev/null || echo 0)
+
+  # 1. gzip integridade (hard).
+  if ! gzip -t "$f" 2>/dev/null; then
+    reasons+=("gzip_corrupt")
+    ((++hard_issues))
+  fi
+
+  # 2. sha256 (registra; não compara — registro pra forensics futura).
+  sha=$(sha256sum "$f" 2>/dev/null | cut -c1-16)
+
+  # 3. estrutura: conta CREATE TABLE/INDEX. zcat falha rápido se gzip ruim.
+  if [[ ${#reasons[@]} -eq 0 ]]; then
+    tables=$(zcat "$f" 2>/dev/null | grep -c '^CREATE TABLE' || true)
+    indexes=$(zcat "$f" 2>/dev/null | grep -c '^CREATE INDEX\|^CREATE UNIQUE INDEX' || true)
+    if [[ $tables -lt $MIN_TABLES ]]; then
+      reasons+=("schema_too_small:tables=$tables")
+    fi
+  else
+    tables=0; indexes=0
+  fi
+
+  # 4. anomalia de tamanho (só se temos vizinho mais antigo).
+  if [[ $prev_size -gt 0 && $size -gt 0 ]]; then
+    # ratio = size/prev_size; usa awk pra float.
+    ratio=$(awk -v a="$size" -v b="$prev_size" 'BEGIN{printf "%.3f", a/b}')
+    grew=$(awk -v r="$ratio" -v t="$ANOMALY_GROW_RATIO" 'BEGIN{print (r>t)?1:0}')
+    shrunk=$(awk -v r="$ratio" -v t="$ANOMALY_SHRINK_RATIO" 'BEGIN{print (r<t)?1:0}')
+    if [[ $grew == 1 ]]; then reasons+=("size_anomaly_grew:ratio=$ratio"); fi
+    if [[ $shrunk == 1 ]]; then reasons+=("size_anomaly_shrunk:ratio=$ratio"); fi
+  fi
+
+  ok=true
+  if [[ ${#reasons[@]} -gt 0 ]]; then
+    ok=false
+    ((++issues))
+  fi
+
+  # Constrói JSON do item. Escape simples — nomes são controlados.
+  reasons_json=$(printf '%s\n' "${reasons[@]}" | awk 'BEGIN{ORS=""; first=1} {if(first){first=0}else{printf ","}; printf "\"%s\"", $0}')
+  item_json=$(printf '{"file":"%s","size":%d,"sha256_16":"%s","tables":%d,"indexes":%d,"ok":%s,"reasons":[%s]}' \
+    "$f" "$size" "$sha" "$tables" "$indexes" "$ok" "$reasons_json")
+  if [[ -n $items_json ]]; then items_json+=","; fi
+  items_json+="$item_json"
+
+  prev_size=$size
+done
+
+now=$(date -u +%s)
+total=${#DUMPS[@]}
+[[ $issues -eq 0 ]] && overall_ok=true || overall_ok=false
+
+printf '{"ok":%s,"timestamp":%d,"checked":%d,"issues":%d,"hard_issues":%d,"items":[%s]}\n' \
+  "$overall_ok" "$now" "$total" "$issues" "$hard_issues" "$items_json"
+
+# Métricas pro textfile collector. Best-effort: o JSON em stdout já carrega
+# o estado real; perder o textfile só atrasa visibilidade no Grafana.
+ok_int=0; [[ $overall_ok == true ]] && ok_int=1
+{
+  cat > "$TEXTFILE.tmp" <<METRICS && mv -f "$TEXTFILE.tmp" "$TEXTFILE" && chmod 0644 "$TEXTFILE"
+# HELP viralefy_backup_verify_last_run_timestamp Unix epoch da última execução de verify.
+# TYPE viralefy_backup_verify_last_run_timestamp gauge
+viralefy_backup_verify_last_run_timestamp $now
+# HELP viralefy_backup_verify_ok 1 se zero issues, 0 caso contrário.
+# TYPE viralefy_backup_verify_ok gauge
+viralefy_backup_verify_ok $ok_int
+# HELP viralefy_backup_verify_checked_total Quantidade de dumps inspecionados na última run.
+# TYPE viralefy_backup_verify_checked_total gauge
+viralefy_backup_verify_checked_total $total
+# HELP viralefy_backup_verify_issues_total Quantidade de dumps com anomalia (soft+hard).
+# TYPE viralefy_backup_verify_issues_total gauge
+viralefy_backup_verify_issues_total $issues
+# HELP viralefy_backup_verify_hard_issues_total Corrupções reais (gzip ruim, ilegível). Alvo do alerta crítico.
+# TYPE viralefy_backup_verify_hard_issues_total gauge
+viralefy_backup_verify_hard_issues_total $hard_issues
+METRICS
+} || echo "warn: textfile $TEXTFILE write failed" >&2
+
+# Exit 1 só em hard issues (corrupção): isso dispara OnFailure no systemd.
+# Soft anomalies (tamanho, schema antigo) viram alerta via métrica Prometheus.
+if [[ $hard_issues -gt 0 ]]; then
+  exit 1
+fi
+exit 0

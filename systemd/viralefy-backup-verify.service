@@ -1,0 +1,38 @@
+[Unit]
+Description=Viralefy — verifica integridade dos dumps em /var/backups/viralefy/
+Documentation=https://github.com/Viralefy/viralefy_ops
+Wants=network-online.target
+After=network-online.target viralefy-backup.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/viralefy-backup-verify
+User=root
+Group=root
+# Read-only nos backups; write apenas no textfile collector.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/backups/viralefy
+ReadWritePaths=/var/lib/prometheus/node_exporter /tmp
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+TimeoutStartSec=5min
+# Loga falha pro journal com tag dedicada (já é default, explícito).
+SyslogIdentifier=viralefy-backup-verify

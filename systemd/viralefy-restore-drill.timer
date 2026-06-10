@@ -1,0 +1,14 @@
+[Unit]
+Description=Viralefy — disparador semanal do restore drill
+Documentation=https://github.com/Viralefy/viralefy_ops
+
+[Timer]
+# Domingo 05:00 UTC — 1h após verify, dia de menor tráfego. Persistente
+# pra rodar no próximo boot se a VPS estava off durante a janela.
+OnCalendar=Sun *-*-* 05:00:00 UTC
+RandomizedDelaySec=30min
+Persistent=true
+Unit=viralefy-restore-drill.service
+
+[Install]
+WantedBy=timers.target

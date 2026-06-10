@@ -21,8 +21,13 @@ install_start() {
 
   log "subindo viralefy-api + fronts"
   systemctl enable --now viralefy-api viralefy-front viralefy-backoffice
-  # Timer do backup do Postgres — diário 03:00 UTC. enable+now agenda imediato.
+  # Timers do backup do Postgres:
+  #   - backup        diário 03:00 UTC (dump + retenção)
+  #   - verify        diário 04:00 UTC (integridade + sanity dos dumps)
+  #   - restore-drill domingo 05:00 UTC (restore real em sandbox docker)
   systemctl enable --now viralefy-backup.timer
+  systemctl enable --now viralefy-backup-verify.timer
+  systemctl enable --now viralefy-restore-drill.timer
   wait_healthy
 }
 

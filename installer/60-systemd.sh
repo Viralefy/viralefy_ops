@@ -22,14 +22,21 @@ install_systemd() {
   done
 
   # Backup do Postgres: service + timer + diretório de saída.
-  for unit in viralefy-backup.service viralefy-backup.timer; do
+  # Verify (daily) e restore drill (weekly) ficam ao lado pra garantir que
+  # os dumps são restauráveis — backup sem verify é "esperança", não SLA.
+  for unit in \
+      viralefy-backup.service viralefy-backup.timer \
+      viralefy-backup-verify.service viralefy-backup-verify.timer \
+      viralefy-restore-drill.service viralefy-restore-drill.timer; do
     install -m 0644 -o root -g root "$src/$unit" "/etc/systemd/system/$unit"
   done
   install -d -m 0700 -o root -g root /var/backups/viralefy
 
-  # Os CLIs (update/status/logs/backup) ficam em /usr/local/sbin pra
-  # sobreviverem ao rm -rf de /viralefy/ops durante o update destrutivo.
-  for cmd in viralefy-update viralefy-status viralefy-logs viralefy-backup viralefy-smoke; do
+  # Os CLIs ficam em /usr/local/sbin pra sobreviverem ao rm -rf de
+  # /viralefy/ops durante o update destrutivo.
+  for cmd in \
+      viralefy-update viralefy-status viralefy-logs viralefy-smoke \
+      viralefy-backup viralefy-backup-verify viralefy-restore-drill; do
     install -m 0755 -o root -g root "$ops_dir/bin/$cmd" "/usr/local/sbin/$cmd"
   done
 
