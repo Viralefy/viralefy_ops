@@ -284,6 +284,22 @@ www.{$DOMAIN_FRONT} {
 		}
 	}
 
+	# ---- PHASE-9 Bucket 4 — checkout via dispatcher → core ---- #
+	# POST /v1/checkout (anonymous checkout possível via optionalUserAuth).
+	# Mesma codepath em legacy e core (fork 1:1), mesma DB, mesmas chaves
+	# Stripe/Heleket/Woovi/Abacate em /etc/viralefy/.env. Parity pré-swap:
+	# 422 INVALID_INPUT em ambos paths com body vazio, idem com Idempotency-Key.
+	# Nota: StripeReconcileCron roda em BOTH legacy e core (background poll
+	# de Stripe Sessions API). Idempotente (UPDATE...WHERE confirmed_at IS NULL),
+	# mas duplica API calls. TODO: desabilitar cron no legacy quando legacy
+	# for parado de vez (post-soak 14d). Webhooks `/v1/webhooks/*` continuam
+	# direto pra viralefy_payments (handle blocks acima), inalterados.
+	handle /v1/checkout* {
+		reverse_proxy 127.0.0.1:8090 {
+			header_up X-Real-IP {http.request.remote.host}
+		}
+	}
+
 	# Default — tudo que não bateu nos handle_path acima vai pro monolito.
 	reverse_proxy 127.0.0.1:8080 {
 		header_up X-Real-IP {http.request.remote.host}
