@@ -1,0 +1,85 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":enableVulnerabilityAlerts"
+  ],
+  "labels": ["dependencies"],
+  "schedule": ["before 12:00 on Monday"],
+  "timezone": "America/Sao_Paulo",
+  "prHourlyLimit": 4,
+  "prConcurrentLimit": 8,
+  "rangeStrategy": "bump",
+  "packageRules": [
+    {
+      "description": "Auto-merge patch/minor for non-0.x packages (stable APIs)",
+      "matchUpdateTypes": ["patch", "minor"],
+      "matchCurrentVersion": "!/^0/",
+      "automerge": true,
+      "automergeType": "branch"
+    },
+    {
+      "description": "Major updates require manual review",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["major-update", "dependencies"]
+    },
+    {
+      "description": "Group all Go modules in a single weekly PR",
+      "matchManagers": ["gomod"],
+      "groupName": "go modules",
+      "schedule": ["before 12:00 on Monday"]
+    },
+    {
+      "description": "Group all Rust crates in a single weekly PR",
+      "matchManagers": ["cargo"],
+      "groupName": "rust crates",
+      "schedule": ["before 12:00 on Monday"]
+    },
+    {
+      "description": "Group all Node modules in a single weekly PR",
+      "matchManagers": ["npm"],
+      "groupName": "node modules",
+      "schedule": ["before 12:00 on Monday"]
+    },
+    {
+      "description": "Keep chi router + jwt updates aligned across Go services",
+      "matchPackageNames": [
+        "github.com/go-chi/chi/v5",
+        "github.com/golang-jwt/jwt/v5"
+      ],
+      "groupName": "go chi + jwt"
+    },
+    {
+      "description": "devDependencies are low risk — auto-merge",
+      "matchDepTypes": ["devDependencies"],
+      "automerge": true
+    },
+    {
+      "description": "Pin GitHub Actions to digests, group together",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions",
+      "pinDigests": true
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "labels": ["security", "urgent"],
+    "automerge": false,
+    "schedule": ["at any time"]
+  },
+  "osvVulnerabilityAlerts": true,
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 12:00 on the first day of the month"]
+  },
+  "postUpdateOptions": ["gomodTidy", "npmDedupe"],
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Renovate Dependency Dashboard",
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/vendor/**",
+    "**/target/**",
+    "**/.next/**"
+  ]
+}
