@@ -76,3 +76,36 @@ scrape_configs:
       - targets: [127.0.0.1:12345]
         labels:
           service: alloy
+
+  # ---- PHASE-9 microservices ----
+  - job_name: viralefy-core
+    metrics_path: /metrics
+    static_configs:
+      - targets: [127.0.0.1:8084]
+        labels:
+          service: viralefy-core
+
+  - job_name: viralefy-dispatcher
+    metrics_path: /metrics
+    static_configs:
+      - targets: [127.0.0.1:8090]
+        labels:
+          service: viralefy-dispatcher
+
+  - job_name: caddy
+    metrics_path: /metrics
+    static_configs:
+      - targets: [127.0.0.1:2019]
+        labels:
+          service: caddy
+
+  # TODO(PHASE-9): expor /metrics nos serviços abaixo. Hoje retornam 404
+  # em /metrics, /internal/metrics e /internal/v1/metrics — descobrir o
+  # mux Prometheus correto (ou montar promhttp) antes de habilitar o scrape.
+  #
+  # - job_name: viralefy-auth      (127.0.0.1:8083)  -> sem handler de métricas
+  # - job_name: viralefy-payments  (127.0.0.1:8081)  -> sem handler de métricas
+  # - job_name: viralefy-sender    (127.0.0.1:8082)  -> sem handler de métricas
+  #
+  # TODO(ops): instalar postgres_exporter (porta padrão 9187) e habilitar
+  # o job 'postgres-exporter'. Hoje a porta não está ouvindo.
