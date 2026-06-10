@@ -19,7 +19,9 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-API_HOST="${VIRALEFY_API_HOST:-127.0.0.1:8080}"
+# PHASE-9 (2026-06-10): legacy api parada em soak. Smoke usa dispatcher
+# (:8090) como ponto único, exatamente como Caddy → upstream em prod.
+API_HOST="${VIRALEFY_API_HOST:-127.0.0.1:8090}"
 PAY_HOST="${VIRALEFY_PAY_HOST:-127.0.0.1:8081}"
 SND_HOST="${VIRALEFY_SND_HOST:-127.0.0.1:8082}"
 
@@ -44,12 +46,12 @@ http_code() {
   echo "${out: -3}"
 }
 
-# ─── 1-3. Healths dos 3 services ──────────────────────────────────────────
-note "health dos 3 services"
+# ─── 1-3. Healths dos services ──────────────────────────────────────────
+note "health dos services (PHASE-9 stack)"
 for entry in \
-    "api    http://$API_HOST/health" \
-    "pay    http://$PAY_HOST/internal/health" \
-    "sender http://$SND_HOST/internal/health"; do
+    "dispatcher http://$API_HOST/_health" \
+    "pay        http://$PAY_HOST/internal/health" \
+    "sender     http://$SND_HOST/internal/health"; do
   svc="${entry%% *}"
   url="${entry##* }"
   code="$(http_code GET "$url")"
@@ -60,14 +62,13 @@ for entry in \
   fi
 done
 
-# ─── PHASE-9 (opcional): healths de core/auth/dispatcher ───────────────────
-# Se os services estão deployados, smoke também valida. Skip silencioso se
-# port não responder — durante cutover muitos hosts ainda não terão tudo.
-note "PHASE-9 services (skip se inativo)"
+# ─── Upstream services (core + auth atrás do dispatcher) ──────────────────
+# Validamos loopback direto pra detectar falha de upstream que o dispatcher
+# possa estar mascarando.
+note "upstream services (core + auth direto)"
 for entry in \
     "core       http://${VIRALEFY_CORE_HOST:-127.0.0.1:8084}/health" \
-    "auth       http://${VIRALEFY_AUTH_HOST:-127.0.0.1:8083}/internal/v1/health" \
-    "dispatcher http://${VIRALEFY_DISP_HOST:-127.0.0.1:8090}/_health"; do
+    "auth       http://${VIRALEFY_AUTH_HOST:-127.0.0.1:8083}/internal/v1/health"; do
   svc="${entry%% *}"
   url="${entry##* }"
   code="$(http_code GET "$url")"

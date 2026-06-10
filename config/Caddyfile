@@ -300,8 +300,12 @@ www.{$DOMAIN_FRONT} {
 		}
 	}
 
-	# Default — tudo que não bateu nos handle_path acima vai pro monolito.
-	reverse_proxy 127.0.0.1:8080 {
+	# Default — fallback pro dispatcher (PHASE-9 finalizado). Dispatcher
+	# tem resolve_upstream que roteia path-by-path pra core/auth/payments.
+	# Paths desconhecidos vão pra core (default no dispatcher), que retorna
+	# 404 — mesmo comportamento do legacy. Stack legacy api (:8080) está
+	# parada em soak (vide .legacy-deprecated em prod).
+	reverse_proxy 127.0.0.1:8090 {
 		header_up X-Real-IP {http.request.remote.host}
 	}
 
