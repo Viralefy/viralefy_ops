@@ -1,0 +1,81 @@
+# Viralefy — Alertmanager config (skeleton).
+#
+# Status atual: NÃO INSTALADO em prod. Aguardando webhook do cliente.
+# Quando cliente fornecer ADMIN_WEBHOOK_URL (Slack/Discord/PagerDuty/OpsGenie),
+# substituir o placeholder abaixo e:
+#   1. Adicionar systemd unit alertmanager.service (template comentado).
+#   2. Adicionar bloco `alerting:` em prometheus.yml apontando pra :9093.
+#   3. Reload Prometheus.
+#
+# Até lá: alertas ficam só no journal/Loki (via /api/v1/alerts do Prometheus).
+
+global:
+  resolve_timeout: 5m
+  # Webhook genérico — substituir quando cliente fornecer.
+  # http_config:
+  #   bearer_token: 'TODO'
+
+route:
+  receiver: 'journal-only'
+  group_by: ['alertname', 'service']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+    # Critical → page imediato.
+    - matchers:
+        - severity = "critical"
+      receiver: 'critical-page'
+      group_wait: 10s
+      repeat_interval: 1h
+      continue: true
+
+    # Warning → ticket/Slack quando configurado.
+    - matchers:
+        - severity = "warning"
+      receiver: 'warning-ticket'
+      repeat_interval: 6h
+      continue: true
+
+    # Info → silenciar (só log).
+    - matchers:
+        - severity = "info"
+      receiver: 'journal-only'
+
+receivers:
+  - name: 'journal-only'
+    # Sem webhook = Alertmanager apenas loga (default).
+
+  - name: 'critical-page'
+    webhook_configs:
+      - url: 'http://127.0.0.1:9999/placeholder-critical'  # TODO: cliente fornece
+        send_resolved: true
+
+  - name: 'warning-ticket'
+    webhook_configs:
+      - url: 'http://127.0.0.1:9999/placeholder-warning'   # TODO: cliente fornece
+        send_resolved: true
+
+# Inibição: quando o serviço inteiro está DOWN, suprimir alertas derivados
+# (HighErrorRate, HighLatency, SLO burns) pra evitar spam.
+inhibit_rules:
+  - source_matchers:
+      - alertname = "ServiceDown"
+    target_matchers:
+      - alertname =~ "SLO.*|.*Latency.*|.*ErrorRate.*"
+    equal: ['service']
+
+  # PostgresDown → suprimir alertas de DB query lentos / pool exhausted.
+  - source_matchers:
+      - alertname = "ServiceDown"
+        job = "postgres-exporter"
+    target_matchers:
+      - alertname =~ "DBConnection.*|DBQuery.*|SLOCoreDB.*"
+
+  # Critical absorve warning do mesmo SLO no mesmo serviço.
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
+    equal: ['slo', 'service']

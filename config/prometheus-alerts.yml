@@ -1,0 +1,488 @@
+# Viralefy — Prometheus alerting rules SLO-based + infra.
+#
+# Carregado via rule_files no prometheus.yml. Convive com alerts.yml (legado
+# de uptime/backup/payments). Ordem de carga:
+#   /etc/prometheus/alerts.yml             (legado — uptime/backup/data invariants)
+#   /etc/prometheus/prometheus-alerts.yml  (este arquivo — SLO burn-rate + infra)
+#
+# Severidades:
+#   critical → page imediato (futuro: Alertmanager → PagerDuty/OpsGenie).
+#              Hoje: vai pro journal + Loki até cliente fornecer webhook.
+#   warning  → ticket/Slack quando configurado.
+#   info     → só log; nenhuma ação automatizada.
+#
+# Convenção de labels (todas obrigatórias):
+#   severity  ∈ {critical, warning, info}
+#   team      ∈ {platform, backend, payments, security, data}
+#   slo       opcional — nome do SLO em observability/slo.yml
+#   service   serviço afetado (matches label `service` do scrape)
+#
+# `for:` mínimo é 2min em critical (evita flap em deploy/reboot) e 5min em warning.
+# Burn-rate alerts não precisam de for: longo porque a janela do rate() já
+# absorve ruído (1h/6h).
+
+groups:
+  # ════════════════════════════════════════════════════════════════════════
+  # SLO — viralefy-api availability (target 99.5%/30d)
+  # ════════════════════════════════════════════════════════════════════════
+  - name: slo_api_availability
+    interval: 30s
+    rules:
+      - alert: SLOApiAvailabilityFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="viralefy-api",status=~"5.."}[1h]))
+            /
+            clamp_min(sum(rate(http_requests_total{service="viralefy-api"}[1h])), 1)
+          ) > 0.072
+          and
+          (
+            sum(rate(http_requests_total{service="viralefy-api",status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(http_requests_total{service="viralefy-api"}[5m])), 1)
+          ) > 0.072
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+          slo: api_availability
+          service: viralefy-api
+        annotations:
+          summary: "SLO api_availability — fast burn (budget esgota em <2h)"
+          description: |
+            5xx ratio em 1h excedeu 7.2% (14.4× target). Mantida essa taxa,
+            consumimos 100% do error budget mensal em 2h.
+            Runbook: viralefy_archive/SLO-DEFINITIONS.md#api_availability
+            Ações imediatas: checar journalctl -u viralefy-api -n 200 +
+            últimos deploys + Caddy access log.
+
+      - alert: SLOApiAvailabilitySlowBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="viralefy-api",status=~"5.."}[6h]))
+            /
+            clamp_min(sum(rate(http_requests_total{service="viralefy-api"}[6h])), 1)
+          ) > 0.03
+          and
+          (
+            sum(rate(http_requests_total{service="viralefy-api",status=~"5.."}[30m]))
+            /
+            clamp_min(sum(rate(http_requests_total{service="viralefy-api"}[30m])), 1)
+          ) > 0.03
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+          slo: api_availability
+          service: viralefy-api
+        annotations:
+          summary: "SLO api_availability — slow burn (50% budget em <1 semana)"
+          description: |
+            5xx ratio em 6h excedeu 3% (6× target). Budget mensal sob risco.
+            Não é page, mas precisa investigação no próximo turno.
+
+  # ════════════════════════════════════════════════════════════════════════
+  # SLO — viralefy-api latência p95 (<500ms) / p99 (<1500ms)
+  # ════════════════════════════════════════════════════════════════════════
+  - name: slo_api_latency
+    interval: 30s
+    rules:
+      - alert: SLOApiLatencyP95High
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket{service="viralefy-api"}[5m]))
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          team: backend
+          slo: api_latency_p95
+          service: viralefy-api
+        annotations:
+          summary: "viralefy-api p95 > 500ms (10min sustained)"
+          description: "Valor atual: {{ $value | humanizeDuration }}. Checar DB pool + N+1 + Caddy upstream timeouts."
+
+      - alert: SLOApiLatencyP99Critical
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le) (rate(http_request_duration_seconds_bucket{service="viralefy-api"}[5m]))
+          ) > 1.5
+        for: 10m
+        labels:
+          severity: critical
+          team: backend
+          slo: api_latency_p99
+          service: viralefy-api
+        annotations:
+          summary: "viralefy-api p99 > 1.5s (10min sustained)"
+          description: "Outliers virando regra. Veja Tempo traces + slow query log."
+
+  # ════════════════════════════════════════════════════════════════════════
+  # SLO — viralefy-core DB query p95 < 100ms
+  # ════════════════════════════════════════════════════════════════════════
+  - name: slo_core_db
+    interval: 30s
+    rules:
+      - alert: SLOCoreDBQueryP95High
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, query_type) (rate(db_query_duration_seconds_bucket{service="viralefy-core"}[5m]))
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          team: backend
+          slo: core_db_query_p95
+          service: viralefy-core
+        annotations:
+          summary: "viralefy-core DB query {{ $labels.query_type }} p95 > 100ms"
+          description: "Valor: {{ $value | humanizeDuration }}. Investigar pg_stat_statements + plan."
+
+  # ════════════════════════════════════════════════════════════════════════
+  # SLO — viralefy-dispatcher overhead p95 < 50ms
+  # ════════════════════════════════════════════════════════════════════════
+  - name: slo_dispatcher
+    interval: 30s
+    rules:
+      - alert: SLODispatcherOverheadP95High
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket{service="viralefy-dispatcher"}[5m]))
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+          slo: dispatcher_overhead_p95
+          service: viralefy-dispatcher
+        annotations:
+          summary: "viralefy-dispatcher overhead p95 > 50ms"
+          description: "Hot-set crescendo? Upstream lento? Checar size da tabela revoked_jtis."
+
+  # ════════════════════════════════════════════════════════════════════════
+  # SLO — viralefy-payments webhook ingestion 99.9% + provider 99%
+  # ════════════════════════════════════════════════════════════════════════
+  - name: slo_payments
+    interval: 30s
+    rules:
+      - alert: SLOPaymentsWebhookIngestFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{service="viralefy-payments",path=~"/v1/webhooks/.*",status=~"5.."}[1h]))
+            /
+            clamp_min(sum(rate(http_requests_total{service="viralefy-payments",path=~"/v1/webhooks/.*"}[1h])), 1)
+          ) > 0.0144
+          and
+          (
+            sum(rate(http_requests_total{service="viralefy-payments",path=~"/v1/webhooks/.*",status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(http_requests_total{service="viralefy-payments",path=~"/v1/webhooks/.*"}[5m])), 1)
+          ) > 0.0144
+        for: 2m
+        labels:
+          severity: critical
+          team: payments
+          slo: payments_webhook_ingestion
+          service: viralefy-payments
+        annotations:
+          summary: "Webhook ingest 5xx > 1.44% — fast burn"
+          description: "Pagamentos podem estar sendo perdidos. Cheque assinatura, idempotency table, DB conn."
+
+      - alert: SLOPaymentsProviderConfirmRate
+        expr: |
+          (
+            sum(rate(gateway_callbacks_total{status!~"confirmed|processed"}[10m]))
+            /
+            clamp_min(sum(rate(gateway_callbacks_total[10m])), 1)
+          ) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+          team: payments
+          slo: payments_provider_calls
+          service: viralefy-payments
+        annotations:
+          summary: "Gateway provider call failure rate > 1%"
+          description: "Provider {{ $labels.provider }} retornando não-confirmed. Pode ser flakiness do provider."
+
+  # ════════════════════════════════════════════════════════════════════════
+  # SLO — Stripe reconcile freshness (TODO: métrica não exposta)
+  # ════════════════════════════════════════════════════════════════════════
+  - name: slo_stripe_reconcile
+    interval: 1m
+    rules:
+      - alert: SLOStripeReconcileStale
+        # absent() dispara quando a métrica não existe (TODO atual).
+        # Quando a métrica for adicionada, este alerta passa a funcionar
+        # como esperado. Severity=info enquanto absent.
+        expr: |
+          (absent(viralefy_stripe_reconcile_last_success_timestamp_seconds) == 1)
+          or
+          ((time() - viralefy_stripe_reconcile_last_success_timestamp_seconds) > 600)
+        for: 10m
+        labels:
+          severity: info
+          team: payments
+          slo: stripe_reconcile_freshness
+        annotations:
+          summary: "Stripe reconcile freshness — métrica ausente ou stale > 10min"
+          description: |
+            Métrica viralefy_stripe_reconcile_last_success_timestamp_seconds
+            está absent ou > 10min antigo. TODO: expor gauge no payments.
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Infra — service up/down
+  # ════════════════════════════════════════════════════════════════════════
+  - name: infra_uptime
+    interval: 30s
+    rules:
+      - alert: ServiceDown
+        expr: up{job=~"viralefy-.*|postgres-exporter|caddy|node"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "{{ $labels.job }} ({{ $labels.instance }}) DOWN há 2min"
+          description: "Job {{ $labels.job }} retornando up=0. Cheque systemctl status."
+
+      - alert: PrometheusScrapeFailing
+        expr: rate(prometheus_target_scrapes_sample_out_of_order_total[5m]) > 0
+          or rate(prometheus_target_scrapes_sample_duplicate_timestamp_total[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Prometheus rejeitando samples (out-of-order ou duplicate)"
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Infra — Postgres
+  # ════════════════════════════════════════════════════════════════════════
+  - name: infra_database
+    interval: 30s
+    rules:
+      - alert: DBConnectionExhausted
+        expr: |
+          sum(pg_stat_activity_count{datname="viralefy"})
+          /
+          on() pg_settings_max_connections
+          > 0.8
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Postgres conn pool > 80% (datname=viralefy)"
+          description: |
+            {{ $value | humanizePercentage }} das conns em uso. Risco de "too many clients".
+            Cheque connection leaks nos services ou aumente max_connections.
+
+      - alert: DBConnectionHigh
+        expr: |
+          sum(pg_stat_activity_count{datname="viralefy"})
+          /
+          on() pg_settings_max_connections
+          > 0.6
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Postgres conn pool > 60% (datname=viralefy)"
+
+      - alert: DBQueryDurationP95SlowGlobal
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, query_type) (rate(db_query_duration_seconds_bucket[5m]))
+          ) > 0.5
+        for: 15m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "DB query p95 > 500ms (qualquer service, {{ $labels.query_type }})"
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Infra — Disco / node_exporter
+  # ════════════════════════════════════════════════════════════════════════
+  - name: infra_disk
+    interval: 1m
+    rules:
+      - alert: DiskSpaceLow
+        expr: |
+          (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|devtmpfs"}
+            /
+            node_filesystem_size_bytes{fstype!~"tmpfs|overlay|devtmpfs"}
+          ) < 0.1
+        for: 10m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Disco {{ $labels.mountpoint }} < 10% livre"
+          description: "{{ $value | humanizePercentage }} restante em {{ $labels.mountpoint }}."
+
+      - alert: DiskSpaceCritical
+        expr: |
+          (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|devtmpfs"}
+            /
+            node_filesystem_size_bytes{fstype!~"tmpfs|overlay|devtmpfs"}
+          ) < 0.05
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Disco {{ $labels.mountpoint }} < 5% livre (URGENTE)"
+
+      - alert: DiskFillingFast
+        # Prediz se nas próximas 4h o filesystem zera, baseado em rate atual.
+        expr: |
+          predict_linear(node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|devtmpfs"}[1h], 4*3600) < 0
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "{{ $labels.mountpoint }} vai zerar em <4h ao ritmo atual"
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Infra — backup / restore drill (textfile collector)
+  # ════════════════════════════════════════════════════════════════════════
+  - name: infra_backup
+    interval: 1m
+    rules:
+      - alert: BackupFailed
+        expr: viralefy_backup_verify_ok == 0
+        for: 10m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Último backup verify FALHOU (viralefy_backup_verify_ok=0)"
+          description: "Veja journalctl -u viralefy-backup-verify e RUNBOOK-BACKUP-VERIFY.md."
+
+      - alert: RestoreDrillFailed
+        expr: viralefy_restore_drill_ok == 0
+        for: 10m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Restore drill semanal FALHOU"
+          description: "DR não validado. Veja journalctl -u viralefy-restore-drill."
+
+      - alert: RestoreDrillStale
+        expr: time() - viralefy_restore_drill_last_run_timestamp > 14 * 24 * 3600
+        for: 1h
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Restore drill não roda há > 14 dias"
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Data invariants — reconcile cron
+  # ════════════════════════════════════════════════════════════════════════
+  # Reconcile cron NÃO expõe métricas Prometheus hoje (output é stdout JSON +
+  # stderr human-readable, consumido pelo journal → Loki). Como o JSON tem
+  # `severity: high|medium|low` por finding, a contagem vem de Loki via
+  # metric query. Como Loki metric queries não disparam alerta Prometheus,
+  # criamos um alerta `info` baseado em exit code via systemd state.
+  # TODO: shim em viralefy-ops/bin/ que parse o JSON e gera textfile prom.
+  - name: data_invariants
+    interval: 1m
+    rules:
+      - alert: ReconcileCronFailed
+        # node_systemd_unit_state vem do node_exporter quando habilitado;
+        # como fallback usamos `viralefy_reconcile_drifts_high` (TODO expor).
+        expr: |
+          (absent(viralefy_reconcile_drifts_high) == 1) or (viralefy_reconcile_drifts_high > 5)
+        for: 30m
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "Reconcile cron > 5 drifts high ou métrica ausente"
+          description: |
+            Adicionar wrapper em viralefy-ops/bin/ que parsa o JSON e
+            grava textfile com viralefy_reconcile_drifts_{high,medium,low}.
+            Até lá este alert fica em modo absent (info).
+
+      - alert: PlanPriceDriftSpike
+        # Reusa métrica REAL já em /metrics do viralefy-api/core.
+        expr: sum by (currency_code) (viralefy_plan_price_drift_rows) > 20
+        for: 30m
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "Drift de preço > 20 rows em {{ $labels.currency_code }}"
+
+  # ════════════════════════════════════════════════════════════════════════
+  # Security — auth/WAF/cert
+  # ════════════════════════════════════════════════════════════════════════
+  - name: security
+    interval: 30s
+    rules:
+      - alert: CorazaBlockSpike
+        # Caddy server metrics NÃO estão expostas hoje (precisa `servers
+        # metrics` no Caddyfile). Fallback: usa 403s vistos no upstream
+        # (api/payments) — não captura blocks puros do WAF que nem chegam
+        # no upstream, mas dispara em ataques que sobrecarregam o pipeline.
+        # TODO: habilitar caddy server metrics + trocar pra caddy_http_requests_total{status="403"}.
+        expr: |
+          sum(rate(http_requests_total{status="403"}[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "403 rate > 5/s no upstream (suspeito de ataque ou FP do WAF)"
+          description: |
+            Veja journalctl -u caddy | grep coraza pra ver as regras
+            disparando. Se for FP, ajustar coraza-crs-exclusions.conf.
+
+      - alert: AuthBruteforce
+        expr: |
+          sum(rate(http_requests_total{path=~"/v1/auth.*",status="429"}[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Rate-limit de login disparando ({{ $value }}/s 429)"
+
+      - alert: TooManyRevokedJTIs
+        # Métrica hot-set: count via postgres-exporter custom query OU via
+        # gauge exposto pelo dispatcher/auth. TODO: ambos.
+        # Alertar quando count > 1000 sugere session theft em massa OU
+        # cron de cleanup de revoked_jtis quebrado.
+        expr: |
+          (absent(viralefy_revoked_jtis_count) == 1)
+          or (viralefy_revoked_jtis_count > 1000)
+        for: 30m
+        labels:
+          severity: info  # info até gauge existir
+          team: security
+        annotations:
+          summary: "revoked_jtis count > 1000 ou métrica ausente"
+          description: "Potential session theft incident OU cleanup cron quebrado."
+
+      - alert: CertExpiringSoon
+        # Caddy lida com renovação ACME automaticamente; este alerta é
+        # safety-net pra renovação travada. Requer blackbox_exporter
+        # (não instalado ainda — alerta absent até lá).
+        expr: |
+          (absent(probe_ssl_earliest_cert_expiry) == 1)
+          or ((probe_ssl_earliest_cert_expiry - time()) < 14 * 24 * 3600)
+        for: 1h
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Cert SSL expira em < 14d em {{ $labels.instance }}"
+          description: "Adicionar blackbox_exporter targets pra api/admin/obs domains."

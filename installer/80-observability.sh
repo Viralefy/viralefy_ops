@@ -155,10 +155,21 @@ install_obs_configs() {
   install -m 0644 -o root -g grafana "$cfg/grafana-dashboards.yaml"    /etc/grafana/provisioning/dashboards/viralefy.yaml
   install -m 0644 -o root -g grafana "$cfg/dashboards/viralefy-api.json" /etc/grafana/dashboards/viralefy-api.json
 
+  # Dashboards de produto (revenue / payments / behavior / reliability) +
+  # SLO (UID viralefy-slo) ficam em ../grafana/dashboards/.
+  local gdash="$ops/grafana/dashboards"
+  if [[ -d "$gdash" ]]; then
+    for f in "$gdash"/*.json; do
+      [[ -f "$f" ]] && install -m 0644 -o root -g grafana "$f" "/etc/grafana/dashboards/$(basename "$f")"
+    done
+  fi
+
   install -m 0644 -o root -g loki       "$cfg/loki.yaml"             /etc/loki/loki.yaml
   install -m 0644 -o root -g tempo      "$cfg/tempo.yaml"            /etc/tempo/tempo.yaml
-  install -m 0644 -o root -g prometheus "$cfg/prometheus.yml"        /etc/prometheus/prometheus.yml
-  install -m 0644 -o root -g prometheus "$cfg/alerts.yml"            /etc/prometheus/alerts.yml
+  install -m 0644 -o root -g prometheus "$cfg/prometheus.yml"             /etc/prometheus/prometheus.yml
+  install -m 0644 -o root -g prometheus "$cfg/alerts.yml"                 /etc/prometheus/alerts.yml
+  install -m 0644 -o root -g prometheus "$cfg/prometheus-alerts.yml"      /etc/prometheus/prometheus-alerts.yml
+  install -d -m 0755 -o root -g prometheus                                /etc/prometheus/rules
   install -m 0644 -o root -g alloy      "$cfg/alloy/config.alloy"    /etc/alloy/config.alloy
 
   info "configs de observabilidade em /etc/{grafana,loki,tempo,prometheus,alloy}"

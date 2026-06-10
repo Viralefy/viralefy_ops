@@ -1,0 +1,247 @@
+# Viralefy — Definições de SLO/SLI canônicas.
+#
+# Este arquivo NÃO é consumido diretamente pelo Prometheus. É:
+#   1. Fonte da verdade pras regras de alerta em ../config/prometheus-alerts.yml
+#      (cada SLO listado aqui tem alertas burn-rate correspondentes).
+#   2. Especificação pro dashboard ../grafana/dashboards/slo.json (UID viralefy-slo).
+#   3. Documentação operacional: o que medimos, qual o target, qual o budget,
+#      e que ação tomar quando burn-rate dispara.
+#
+# Formato inspirado no spec do sloth (https://sloth.dev) mas mantido simples —
+# não dependemos de geração automática.
+#
+# CONSTRAINT IMPORTANTE: Todas as métricas referenciadas aqui DEVEM existir
+# no /metrics dos serviços ou via textfile collector. Não inventamos métrica.
+# Métricas confirmadas em produção (10-jun-2026):
+#   - http_requests_total{service,status,path}            — api/auth/payments/sender/core
+#   - http_request_duration_seconds_bucket{service,...}   — idem
+#   - db_query_duration_seconds_bucket{service,query_type}— idem
+#   - gateway_callbacks_total{provider,status}            — api/core (webhook ingest)
+#   - viralefy_plan_price_drift_rows{currency_code}       — api/core (cron)
+#   - viralefy_backup_last_success_timestamp              — textfile (timer)
+#   - viralefy_backup_last_size_bytes                     — textfile (timer)
+#   - viralefy_backup_verify_ok                           — textfile (timer)
+#   - viralefy_restore_drill_ok                           — textfile (timer)
+#   - up{job}                                             — Prometheus scrape
+#   - node_filesystem_avail_bytes / node_filesystem_size_bytes — node_exporter
+#   - pg_stat_activity_count                              — postgres-exporter
+
+version: "1.0"
+service_default_window: 30d
+
+# Por que 99.5% (e não 99.9% ou 99.99%)?
+#   - Stack single-VPS (sem HA): janela de manutenção = downtime real.
+#   - Cliente atual aceita janelas curtas (HML→prod, ambiente único).
+#   - 99.5%/30d = ~3.6h budget; dá espaço pra 1 deploy ruim + 1 incident curto.
+#   - Subir pra 99.9% sem HA gera alert fatigue (qualquer reboot estoura budget).
+#   - Quando houver replica + LB, revisar pra 99.9%.
+
+slos:
+  # ─── Edge & Caddy ──────────────────────────────────────────────────────────
+  - name: api_availability
+    title: "api.viralefy.com — availability"
+    description: |
+      Razão de requests sem erro server-side em /v1/*. Exclui 4xx esperados
+      (401/403/404/422 são "user error", não falha de service). Inclui 5xx,
+      timeouts (não respondidos contam como erro via blackbox em camada 2).
+    service: viralefy-api
+    sli:
+      good_events: |
+        sum(rate(http_requests_total{service="viralefy-api",status!~"5.."}[5m]))
+      total_events: |
+        sum(rate(http_requests_total{service="viralefy-api"}[5m]))
+    target: 99.5
+    window: 30d
+    alerting:
+      page_burn_rate_2h: 14.4   # consome 100% do budget em 2h
+      ticket_burn_rate_6h: 6.0  # consome 100% em ~5d
+    runbook: viralefy_archive/SLO-DEFINITIONS.md#api_availability
+
+  - name: api_latency_p95
+    title: "api.viralefy.com — latência p95 < 500ms"
+    description: |
+      P95 da duração de requests bem-sucedidos. Threshold 500ms representa
+      o limite que mantém UX percebida como rápida (checkout, listagens).
+    service: viralefy-api
+    sli:
+      good_events: |
+        sum(rate(http_request_duration_seconds_bucket{service="viralefy-api",le="0.5"}[5m]))
+      total_events: |
+        sum(rate(http_request_duration_seconds_count{service="viralefy-api"}[5m]))
+    target: 95.0
+    window: 30d
+    alerting:
+      page_burn_rate_2h: 14.4
+      ticket_burn_rate_6h: 6.0
+
+  - name: api_latency_p99
+    title: "api.viralefy.com — latência p99 < 1500ms"
+    description: |
+      P99 da duração — outliers. 1.5s é o limite antes do request parecer
+      "travado" (browser exibe spinner persistente, usuário abandona).
+    service: viralefy-api
+    sli:
+      good_events: |
+        sum(rate(http_request_duration_seconds_bucket{service="viralefy-api",le="1.5"}[5m]))
+      total_events: |
+        sum(rate(http_request_duration_seconds_count{service="viralefy-api"}[5m]))
+    target: 99.0
+    window: 30d
+
+  # ─── viralefy-core (Go monolith) ───────────────────────────────────────────
+  - name: core_db_query_p95
+    title: "viralefy-core — DB query p95 < 100ms"
+    description: |
+      Razão de queries DB que completam em ≤100ms. Indicador de saúde do
+      Postgres + correto uso de índices. Quebra denuncia FTS, lock contention
+      ou query plan ruim.
+    service: viralefy-core
+    sli:
+      good_events: |
+        sum(rate(db_query_duration_seconds_bucket{service="viralefy-core",le="0.1"}[5m]))
+      total_events: |
+        sum(rate(db_query_duration_seconds_count{service="viralefy-core"}[5m]))
+    target: 95.0
+    window: 30d
+
+  # ─── viralefy-dispatcher (Rust proxy) ──────────────────────────────────────
+  - name: dispatcher_overhead_p95
+    title: "viralefy-dispatcher — overhead p95 < 50ms"
+    description: |
+      O dispatcher só proxieia + valida JWT/revogação. Overhead acima de
+      50ms p95 denuncia hot-set crescendo demais ou lookup ineficiente.
+      Nota: dispatcher expõe http_request_duration_seconds em /metrics.
+    service: viralefy-dispatcher
+    sli:
+      good_events: |
+        sum(rate(http_request_duration_seconds_bucket{service="viralefy-dispatcher",le="0.05"}[5m]))
+      total_events: |
+        sum(rate(http_request_duration_seconds_count{service="viralefy-dispatcher"}[5m]))
+    target: 95.0
+    window: 30d
+
+  # ─── viralefy-payments (Go) ────────────────────────────────────────────────
+  - name: payments_webhook_ingestion
+    title: "viralefy-payments — webhook ingestion success 99.9%"
+    description: |
+      Razão de webhooks /v1/webhooks/{stripe,heleket,abacate} que retornam
+      2xx (aceito) sobre o total recebido. Inclui idempotency hit (200 OK)
+      como sucesso. Falha = 5xx (signature invalid já retorna 401, esperado).
+    service: viralefy-payments
+    sli:
+      good_events: |
+        sum(rate(http_requests_total{service="viralefy-payments",path=~"/v1/webhooks/.*",status=~"2.."}[5m]))
+      total_events: |
+        sum(rate(http_requests_total{service="viralefy-payments",path=~"/v1/webhooks/.*"}[5m]))
+    target: 99.9
+    window: 30d
+    alerting:
+      page_burn_rate_2h: 14.4
+
+  - name: payments_provider_calls
+    title: "viralefy-payments — provider call success 99%"
+    description: |
+      Webhooks externos confirmados sem erro do gateway (status=confirmed
+      ou status=processed). Métrica direta: gateway_callbacks_total.
+      Trade-off: 99% absorve flakiness do Stripe/Heleket sem alertar.
+    service: viralefy-payments
+    sli:
+      good_events: |
+        sum(rate(gateway_callbacks_total{status=~"confirmed|processed"}[5m]))
+      total_events: |
+        sum(rate(gateway_callbacks_total[5m]))
+    target: 99.0
+    window: 30d
+
+  # ─── Stripe reconcile (cron) ───────────────────────────────────────────────
+  # Lateneia "confirmar order" é medida indiretamente: idade do último
+  # reconcile bem-sucedido. Cron roda a cada 5min, então > 10min sem sucesso
+  # significa que estamos atrás do invariante.
+  - name: stripe_reconcile_freshness
+    title: "Stripe reconcile — última run < 10min"
+    description: |
+      Garante que o cron de reconciliação Stripe rodou nas últimas 10min.
+      Threshold é 2x o intervalo (5min) pra absorver jitter + retry.
+      Métrica DEPENDÊNCIA: viralefy_stripe_reconcile_last_success_timestamp_seconds
+      (NÃO EXPOSTA AINDA — TODO no payments service; alerta criado em
+      modo "info" até a métrica existir, vide prometheus-alerts.yml).
+    service: viralefy-payments
+    sli:
+      indicator: |
+        (time() - viralefy_stripe_reconcile_last_success_timestamp_seconds) < 600
+    target: 99.0
+    window: 30d
+    todo: "Expor gauge viralefy_stripe_reconcile_last_success_timestamp_seconds em viralefy-payments."
+
+  # ─── Hot-set revogação (NOTIFY → reject) ───────────────────────────────────
+  - name: revocation_propagation_p99
+    title: "Hot-set revoked JTI — NOTIFY→reject p99 < 5s"
+    description: |
+      Tempo entre `INSERT INTO revoked_jtis` (com pg_notify) e o dispatcher
+      passar a rejeitar tokens com aquele JTI. Hoje observado em ~3s p99
+      (LISTEN/NOTIFY no Rust dispatcher). 5s é o ceiling antes de virar
+      janela aceitável pra session hijack pós-logout.
+      Métrica DEPENDÊNCIA: viralefy_revocation_propagation_seconds (histograma
+      no dispatcher) — NÃO EXPOSTA AINDA. Indicador atual = log-based via Loki
+      (ver runbook).
+    service: viralefy-dispatcher
+    sli:
+      indicator: |
+        histogram_quantile(0.99,
+          sum by (le) (rate(viralefy_revocation_propagation_seconds_bucket[5m]))
+        )
+    target: 99.0
+    window: 30d
+    todo: "Adicionar histogram em viralefy_auth/cmd/auth + viralefy_api_rust."
+
+  # ─── Coraza WAF (test payloads) ────────────────────────────────────────────
+  # Block rate em payloads de teste é validado off-Prometheus (via ZAP/nikto
+  # no pentest baseline). Aqui medimos a proxy: quantos requests o WAF está
+  # examinando vs deixando passar sem inspeção (skipped). Skipped > 0 =
+  # configuração quebrada.
+  - name: coraza_inspection_rate
+    title: "Coraza WAF — 100% dos requests inspecionados"
+    description: |
+      Caddy expõe `caddy_http_requests_total{handler="coraza"}` quando o
+      handler está ativo. Se o ratio handler=coraza / total cair abaixo
+      de 99%, regra de roteamento Caddy regrediu (WAF bypass).
+      OBS: SLO conservador — config atual cobre 100% das rotas /v1/*.
+    service: caddy
+    sli:
+      good_events: |
+        sum(rate(caddy_http_requests_total{handler=~".*coraza.*"}[5m]))
+      total_events: |
+        sum(rate(caddy_http_requests_total[5m]))
+    target: 99.0
+    window: 30d
+    todo: |
+      Caddy server metrics NÃO expostas hoje (apenas admin endpoint expõe
+      counter). Habilitar `servers { metrics }` no Caddyfile + restart.
+      Até lá: SLO permanece em modo TODO (alerta usa proxy via 403s do upstream).
+
+  # ─── Backup (textfile collector) ───────────────────────────────────────────
+  - name: backup_daily_success
+    title: "Backup diário — 100% de sucesso"
+    description: |
+      Backup roda 03:30 UTC via systemd timer. viralefy_backup_last_success_timestamp
+      atualiza a cada sucesso; viralefy_backup_verify_ok valida o dump.
+      "Sucesso" = ambos atualizados em <36h E verify_ok=1.
+    service: viralefy-backup
+    sli:
+      indicator: |
+        viralefy_backup_verify_ok == 1
+        and
+        (time() - viralefy_backup_last_success_timestamp) < 36 * 3600
+    target: 100.0   # backup é binário (ou rodou ou não)
+    window: 30d
+
+# ─── Burn-rate math ──────────────────────────────────────────────────────────
+# Para SLO de 99.5%/30d (error budget = 0.5%):
+#   - Fast burn (page): error rate ≥ 14.4× target em 1h consome 100% budget em 2h.
+#     Formula: rate(errors[1h]) / rate(total[1h]) > (1 - 0.995) * 14.4 = 0.072 (7.2%)
+#   - Slow burn (ticket): error rate ≥ 6× em 6h consome 100% em 5d.
+#     Formula: rate(errors[6h]) / rate(total[6h]) > 0.03 (3%)
+# Para SLO de 99.9% (budget = 0.1%):
+#   - Fast: rate > 0.0144 (1.44%)
+#   - Slow: rate > 0.006 (0.6%)
+# Multi-window multi-burn-rate (Google SRE workbook ch.5) é overkill pro stack atual.
