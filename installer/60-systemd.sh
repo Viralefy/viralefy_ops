@@ -32,6 +32,23 @@ install_systemd() {
   done
   install -d -m 0700 -o root -g root /var/backups/viralefy
 
+  # PHASE-9 crons do viralefy_core: reconcile (drift diário) e
+  # user-deletion (hard-delete LGPD Art. 18 IV). Cada um é um binário
+  # Go separado em /usr/local/sbin/ — o build do core gera ambos
+  # quando presentes. Unit + timer instalados aqui; CLI fica condicional
+  # à existência do binário (host sem core ignora silenciosamente).
+  for unit in \
+      viralefy-reconcile.service viralefy-reconcile.timer \
+      viralefy-user-deletion.service viralefy-user-deletion.timer; do
+    if [[ -f "$src/$unit" ]]; then
+      install -m 0644 -o root -g root "$src/$unit" "/etc/systemd/system/$unit"
+    fi
+  done
+
+  # Diretório do node_exporter textfile collector pras métricas do
+  # user-deletion-cron — node_exporter já lê esse path por convenção.
+  install -d -m 0755 -o root -g root /var/lib/node_exporter/textfile_collector
+
   # Os CLIs ficam em /usr/local/sbin pra sobreviverem ao rm -rf de
   # /viralefy/ops durante o update destrutivo.
   for cmd in \

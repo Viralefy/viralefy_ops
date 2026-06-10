@@ -1,0 +1,53 @@
+[Unit]
+Description=Viralefy — cron diário de hard-delete físico LGPD (Art. 18 IV)
+Documentation=https://github.com/Viralefy/viralefy_ops
+Wants=network-online.target postgresql.service
+After=network-online.target postgresql.service viralefy-reconcile.service
+
+[Service]
+Type=oneshot
+# DATABASE_URL e ADMIN_WEBHOOK_URL vêm do .env compartilhado da app.
+# TEXTFILE_PATH é o caminho onde node_exporter coleta as métricas .prom.
+EnvironmentFile=/etc/viralefy/.env
+Environment=TEXTFILE_PATH=/var/lib/node_exporter/textfile_collector/viralefy_user_deletion.prom
+ExecStart=/usr/local/sbin/viralefy-user-deletion
+User=viralefy-core
+Group=viralefy
+
+# Falha sai com 1 (ao menos um pedido falhou) ou 2 (erro infra). Em
+# ambos, journal captura stderr + stdout e systemd marca o unit como
+# failed pro alert ops. exit 0 = nada a fazer ou todos executados OK.
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=15min
+
+# Hardening — escreve em DB + 1 arquivo .prom; sem mais nada.
+NoNewPrivileges=true
+ProtectSystem=strict
+# textfile collector path precisa ser gravável; expomos só esse dir.
+ReadWritePaths=/var/lib/node_exporter/textfile_collector
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @debug @mount @cpu-emulation @obsolete
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

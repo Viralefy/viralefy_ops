@@ -1,0 +1,19 @@
+[Unit]
+Description=Viralefy — disparador diário do hard-delete LGPD
+Documentation=https://github.com/Viralefy/viralefy_ops
+
+[Timer]
+# 03:30 UTC todo dia — DEPOIS do reconcile (03:30 também com jitter
+# 15min). Ordem prefere reconcile primeiro pra detectar drift ANTES
+# de executar mutações destrutivas em massa. Em caso de overlap o
+# unit do user-deletion espera porque o service tem
+# After=viralefy-reconcile.service.
+OnCalendar=*-*-* 03:45:00 UTC
+RandomizedDelaySec=15min
+# Catch-up se a máquina estiver desligada na hora marcada — o cron
+# DEVE rodar diariamente pra LGPD; tolerar gap é grave.
+Persistent=true
+Unit=viralefy-user-deletion.service
+
+[Install]
+WantedBy=timers.target
