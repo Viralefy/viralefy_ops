@@ -206,29 +206,34 @@ groups:
           description: "Provider {{ $labels.provider }} retornando não-confirmed. Pode ser flakiness do provider."
 
   # ════════════════════════════════════════════════════════════════════════
-  # SLO — Stripe reconcile freshness (TODO: métrica não exposta)
+  # SLO — Stripe reconcile freshness
   # ════════════════════════════════════════════════════════════════════════
+  # Métrica exposta por viralefy-core (cron StripeReconcileCron, tick 5min).
+  # Threshold 10min = 2× intervalo do cron, absorve jitter + retry sem
+  # alertar em cada flap. Severity=warning porque webhook é o caminho
+  # principal — reconcile é safety net; perdê-la por 10min não é incidente
+  # crítico mas indica que o cron parou.
   - name: slo_stripe_reconcile
     interval: 1m
     rules:
       - alert: SLOStripeReconcileStale
-        # absent() dispara quando a métrica não existe (TODO atual).
-        # Quando a métrica for adicionada, este alerta passa a funcionar
-        # como esperado. Severity=info enquanto absent.
         expr: |
-          (absent(viralefy_stripe_reconcile_last_success_timestamp_seconds) == 1)
+          (absent(viralefy_stripe_reconcile_last_run_timestamp) == 1)
           or
-          ((time() - viralefy_stripe_reconcile_last_success_timestamp_seconds) > 600)
+          ((time() - viralefy_stripe_reconcile_last_run_timestamp) > 600)
         for: 10m
         labels:
-          severity: info
+          severity: warning
           team: payments
           slo: stripe_reconcile_freshness
+          service: viralefy-core
         annotations:
-          summary: "Stripe reconcile freshness — métrica ausente ou stale > 10min"
+          summary: "Stripe reconcile freshness — última run > 10min (ou métrica absent)"
           description: |
-            Métrica viralefy_stripe_reconcile_last_success_timestamp_seconds
-            está absent ou > 10min antigo. TODO: expor gauge no payments.
+            viralefy_stripe_reconcile_last_run_timestamp não atualizou nos
+            últimos 10min. Cron deveria tickar a cada 5min. Webhooks Stripe
+            seguem funcionando, mas a safety-net pra webhook miss parou.
+            Cheque journalctl -u viralefy-core | grep stripe_reconcile.
 
   # ════════════════════════════════════════════════════════════════════════
   # Infra — service up/down

@@ -18,6 +18,10 @@
 #   - db_query_duration_seconds_bucket{service,query_type}— idem
 #   - gateway_callbacks_total{provider,status}            — api/core (webhook ingest)
 #   - viralefy_plan_price_drift_rows{currency_code}       — api/core (cron)
+#   - viralefy_stripe_reconcile_last_run_timestamp        — core (cron, since 2026-06-10)
+#   - viralefy_stripe_reconcile_last_run_duration_ms      — core (cron)
+#   - viralefy_stripe_reconcile_orders_{checked,confirmed}_total — core (cron)
+#   - viralefy_stripe_reconcile_errors_total{type}        — core (cron)
 #   - viralefy_backup_last_success_timestamp              — textfile (timer)
 #   - viralefy_backup_last_size_bytes                     — textfile (timer)
 #   - viralefy_backup_verify_ok                           — textfile (timer)
@@ -154,24 +158,27 @@ slos:
     window: 30d
 
   # ─── Stripe reconcile (cron) ───────────────────────────────────────────────
-  # Lateneia "confirmar order" é medida indiretamente: idade do último
+  # Latência "confirmar order" é medida indiretamente: idade do último
   # reconcile bem-sucedido. Cron roda a cada 5min, então > 10min sem sucesso
   # significa que estamos atrás do invariante.
+  #
+  # Métrica exposta por viralefy-core a partir de 2026-06-10 (cron StripeReconcileCron
+  # em internal/application/stripe_reconcile_cron.go). Companion metrics:
+  #   - viralefy_stripe_reconcile_last_run_duration_ms
+  #   - viralefy_stripe_reconcile_orders_checked_total
+  #   - viralefy_stripe_reconcile_orders_confirmed_total
+  #   - viralefy_stripe_reconcile_errors_total{type=query|lookup|confirm|rate_limited}
   - name: stripe_reconcile_freshness
     title: "Stripe reconcile — última run < 10min"
     description: |
       Garante que o cron de reconciliação Stripe rodou nas últimas 10min.
       Threshold é 2x o intervalo (5min) pra absorver jitter + retry.
-      Métrica DEPENDÊNCIA: viralefy_stripe_reconcile_last_success_timestamp_seconds
-      (NÃO EXPOSTA AINDA — TODO no payments service; alerta criado em
-      modo "info" até a métrica existir, vide prometheus-alerts.yml).
-    service: viralefy-payments
+    service: viralefy-core
     sli:
       indicator: |
-        (time() - viralefy_stripe_reconcile_last_success_timestamp_seconds) < 600
+        (time() - viralefy_stripe_reconcile_last_run_timestamp) < 600
     target: 99.0
     window: 30d
-    todo: "Expor gauge viralefy_stripe_reconcile_last_success_timestamp_seconds em viralefy-payments."
 
   # ─── Hot-set revogação (NOTIFY → reject) ───────────────────────────────────
   - name: revocation_propagation_p99
