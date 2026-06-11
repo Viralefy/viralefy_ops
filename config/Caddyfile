@@ -322,8 +322,14 @@ www.{$DOMAIN_FRONT} {
 			header_up X-Real-IP {http.request.remote.host}
 		}
 	}
+	# JWKS — bypass dispatcher rate limit (SEV-2 fix 2026-06-11)
+	# Verifiers externos (SDK clients, payment webhooks, sender) precisam
+	# JWKS sempre acessível. Dispatcher tem tower_governor 30 burst + 1/s
+	# per-IP, que bloqueava JWKS após poucos hits. Caddy direto pra auth
+	# bypassa o limite + adiciona Cache-Control 60s pra browser/CDN cache.
 	handle /.well-known/jwks.json {
-		reverse_proxy 127.0.0.1:8090 {
+		header Cache-Control "public, max-age=60, stale-while-revalidate=300"
+		reverse_proxy 127.0.0.1:8083 {
 			header_up X-Real-IP {http.request.remote.host}
 		}
 	}
