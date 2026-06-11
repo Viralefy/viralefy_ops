@@ -255,14 +255,35 @@ www.{$DOMAIN_FRONT} {
 	}
 
 	# Rotas de auth — via dispatcher (mantém JWT issuance dual-sign,
-	# rate limit, observability). Default 404 pra qualquer outro path.
+	# rate limit, observability).
 	handle /v1/auth* {
 		reverse_proxy 127.0.0.1:8090 {
 			header_up X-Real-IP {http.request.remote.host}
 		}
 	}
 
-	# Default — 404 explícito (auth host só responde auth).
+	# ---- UI de login UNIFICADA (2026-06-11) ---------------------------------
+	# A interface de login deixou de viver em www.viralefy.com/login e
+	# admin.viralefy.com/login (duplicada) — agora APENAS auth.viralefy.com
+	# serve o formulário. Reusamos o build do front (Next.js em :3000) pra
+	# não criar outro pipeline. Caddy proxa só os paths de identidade visual:
+	#   /login            — credentials + 2FA wizard (user + admin)
+	#   /register         — autocadastro de cliente
+	#   /forgot-password  — request reset
+	#   /reset-password   — confirma reset com token de email
+	#   /sso/callback     — landing OAuth-style pra reler hash e redirect
+	#
+	# Assets do Next.js (_next/static/*, css, JS) também precisam passar
+	# pra renderizar o build sem 404 — proxy permissivo.
+	@auth_ui path /login /login/* /register /register/* /forgot-password /forgot-password/* /reset-password /reset-password/* /sso/callback /sso/callback/* /_next/* /favicon.ico /logo.png /icon.svg /robots.txt
+	handle @auth_ui {
+		reverse_proxy 127.0.0.1:3000 {
+			header_up X-Real-IP {http.request.remote.host}
+			header_up Host {http.request.host}
+		}
+	}
+
+	# Default — 404 explícito (auth host só responde auth + UI de login).
 	respond "Not Found" 404 {
 		close
 	}
