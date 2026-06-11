@@ -169,6 +169,9 @@ www.{$DOMAIN_FRONT} {
 		# (mesmo eTLD+1) acessar via fetch com CORS; bloqueia cross-origin
 		# leakage de respostas pra contextos hostis.
 		Cross-Origin-Resource-Policy "same-site"
+		# Hardening test 2026-06-11: API só serve JSON. Bloqueia features
+		# do browser que API nunca deveria pedir — defense em profundidade.
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), interest-cohort=(), browsing-topics=(), payment=(), usb=()"
 		-Server
 		-X-Powered-By
 	}
