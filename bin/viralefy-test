@@ -1,0 +1,380 @@
+#!/usr/bin/env bash
+# viralefy-test — runner único da malha de testes do sistema vivo (§22 das
+# diretrizes). Aceita modos como subcomando e roda cada script standalone
+# em tests/<mode>/*.sh, agregando resultados em log dir estruturado.
+#
+# Uso:
+#   viralefy test                  # default: smoke
+#   viralefy test smoke
+#   viralefy test integration
+#   viralefy test security
+#   viralefy test pentest
+#   viralefy test authz
+#   viralefy test hardening
+#   viralefy test chaos
+#   viralefy test simulated
+#   viralefy test unit
+#   viralefy test all              # tudo exceto chaos+unit
+#   viralefy test full             # all + chaos + unit
+#   viralefy test seed-superadmin
+#   viralefy test seed-manager
+#   viralefy test seed-viewer
+#   viralefy test seed-users
+#   viralefy test seed-orders
+#   viralefy test seed-all
+#   viralefy test clean-seeds
+#
+# Opções:
+#   --verbose            ecoa stdout/stderr de cada script no terminal
+#   --quiet              só PASS/FAIL final, sem progresso
+#   --continue-on-fail   roda todos os scripts mesmo se algum falhar (default)
+#   --fail-fast          aborta no primeiro script que falhar
+#   --log-dir <path>     override do diretório de logs
+#   --help               este texto
+#
+# Saída (§22.2):
+#   <log_dir>/summary.txt        — linhas "PASS|FAIL category/name"
+#   <log_dir>/summary.json       — schema fixo (contrato pra dashboards/CI)
+#   <log_dir>/run-totals.txt     — 8 linhas: mode/started/finished/duration/scripts/pass/fail/exit
+#   <log_dir>/<category>-<name>.log — output completo de cada script
+#
+# Exit code: 0 se tudo PASS; 1 se qualquer FAIL.
+#
+# Sem deps externas além de bash + jq + date + python3 (todos hosts Debian).
+
+set -uo pipefail
+
+# Cores só se TTY
+if [[ -t 1 ]]; then
+  C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YEL=$'\033[33m'
+  C_BLU=$'\033[34m'; C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'; C_RST=$'\033[0m'
+else
+  C_RED=""; C_GRN=""; C_YEL=""; C_BLU=""; C_DIM=""; C_BOLD=""; C_RST=""
+fi
+
+usage() {
+  sed -n '3,30p' "$0" | sed 's/^# \?//'
+  exit "${1:-0}"
+}
+
+# ── Resolução do TESTS_DIR ──────────────────────────────────────────────
+# Procura em locais conhecidos (instalado em prod, repo dev local).
+resolve_tests_dir() {
+  local candidates=(
+    "${VIRALEFY_TESTS_DIR:-}"
+    "/opt/viralefy-tests"
+    "/viralefy/ops/tests"
+  )
+  # Fallback: relativo ao próprio script (dev/CI)
+  local script_dir
+  script_dir="$(cd -P "$(dirname "$0")" && pwd)"
+  candidates+=("$script_dir/../tests")
+
+  for c in "${candidates[@]}"; do
+    [[ -z "$c" ]] && continue
+    if [[ -d "$c" && -f "$c/lib.sh" ]]; then
+      echo "$c"
+      return 0
+    fi
+  done
+  return 1
+}
+
+TESTS_DIR="$(resolve_tests_dir)" || {
+  echo "${C_RED}erro:${C_RST} não encontrei tests/lib.sh em locais conhecidos." >&2
+  echo "      Set VIRALEFY_TESTS_DIR=/path/to/tests ou instale em /opt/viralefy-tests/" >&2
+  exit 2
+}
+
+# ── Args ────────────────────────────────────────────────────────────────
+MODE=""
+VERBOSE=0
+QUIET=0
+FAIL_FAST=0
+LOG_DIR_OVERRIDE=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --verbose)          VERBOSE=1; shift ;;
+    --quiet)            QUIET=1; shift ;;
+    --continue-on-fail) FAIL_FAST=0; shift ;;
+    --fail-fast)        FAIL_FAST=1; shift ;;
+    --log-dir)          LOG_DIR_OVERRIDE="$2"; shift 2 ;;
+    -h|--help)          usage 0 ;;
+    -*)
+      echo "opção desconhecida: $1" >&2; usage 2 ;;
+    *)
+      if [[ -z "$MODE" ]]; then MODE="$1"; shift
+      else echo "argumento extra: $1" >&2; usage 2; fi
+      ;;
+  esac
+done
+
+MODE="${MODE:-smoke}"
+
+# ── Resolução de log dir ───────────────────────────────────────────────
+TS="$(date -u +%Y-%m-%d-%H%M%S)"
+PID="$$"
+if [[ -n "$LOG_DIR_OVERRIDE" ]]; then
+  LOG_DIR="$LOG_DIR_OVERRIDE"
+else
+  # /var/log/viralefy/ em prod (writable). Fallback /tmp/ em dev/CI.
+  if [[ -w /var/log/viralefy ]] || mkdir -p /var/log/viralefy 2>/dev/null; then
+    LOG_DIR="/var/log/viralefy/test-${TS}-${PID}"
+  else
+    LOG_DIR="/tmp/viralefy-test-${TS}-${PID}"
+  fi
+fi
+mkdir -p "$LOG_DIR"
+
+# ── Helpers ─────────────────────────────────────────────────────────────
+note() { (( QUIET == 0 )) && printf '%s[viralefy-test]%s %s\n' "$C_BLU" "$C_RST" "$*"; }
+err()  { printf '%s[viralefy-test ERR]%s %s\n' "$C_RED" "$C_RST" "$*" >&2; }
+
+# Categorias canônicas
+CATEGORIES_BASIC=(smoke integration security pentest authz hardening simulated)
+CATEGORIES_FULL=(smoke integration security pentest authz hardening simulated chaos unit)
+
+# Resolve scripts pra rodar dado um MODE
+list_scripts_for_category() {
+  local cat="$1"
+  local dir="$TESTS_DIR/$cat"
+  [[ -d "$dir" ]] || return 0
+  # Encontra .sh executáveis, ordena por nome
+  find "$dir" -maxdepth 1 -type f -name '*.sh' 2>/dev/null | sort
+}
+
+# ── Seeds / cleanup (delegados) ────────────────────────────────────────
+# Cada ação roda um wrapper .sh em tests/seeds/ que aplica o .sql
+# correspondente via psql. Idempotente (ON CONFLICT DO UPDATE).
+do_seeds() {
+  local action="$1"
+  local script="$TESTS_DIR/seeds/${action}.sh"
+  if [[ -x "$script" ]]; then
+    note "rodando $script"
+    exec "$script"
+  fi
+  if [[ -f "$script" ]]; then
+    note "rodando bash $script"
+    exec bash "$script"
+  fi
+  err "$action não implementado em $TESTS_DIR/seeds/"
+  err "esperado: $script"
+  exit 3
+}
+
+case "$MODE" in
+  seed-superadmin|seed-manager|seed-viewer|seed-users|seed-orders|seed-all|clean-seeds)
+    do_seeds "$MODE"
+    ;;
+esac
+
+# ── Resolve lista de categorias dado MODE ──────────────────────────────
+case "$MODE" in
+  all)
+    SELECTED=("${CATEGORIES_BASIC[@]}")
+    ;;
+  full)
+    SELECTED=("${CATEGORIES_FULL[@]}")
+    ;;
+  smoke|integration|security|pentest|authz|hardening|chaos|simulated|unit)
+    SELECTED=("$MODE")
+    ;;
+  *)
+    err "modo desconhecido: '$MODE'"
+    usage 2
+    ;;
+esac
+
+# ── Banner inicial ──────────────────────────────────────────────────────
+STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+STARTED_EPOCH="$(date +%s)"
+
+note "mode=$MODE log_dir=$LOG_DIR"
+note "started_at=$STARTED_AT"
+(( QUIET == 0 )) && echo
+
+# ── Roda scripts ────────────────────────────────────────────────────────
+# Arrays paralelos: nome lógico (cat/name) → status
+RESULTS_CAT=()
+RESULTS_NAME=()
+RESULTS_STATUS=()  # "pass" | "fail"
+
+SUMMARY_TXT="$LOG_DIR/summary.txt"
+: > "$SUMMARY_TXT"
+
+PASS=0
+FAIL=0
+SCRIPTS=0
+
+run_one() {
+  local cat="$1" script="$2"
+  local name
+  name="$(basename "$script" .sh)"
+  local log_file="$LOG_DIR/${cat}-${name}.log"
+
+  (( QUIET == 0 )) && printf '%s▶ %s/%s%s\n' "$C_BOLD" "$cat" "$name" "$C_RST"
+
+  local rc
+  if (( VERBOSE == 1 )); then
+    # tee pra terminal + arquivo
+    bash "$script" 2>&1 | tee "$log_file"
+    rc=${PIPESTATUS[0]}
+  else
+    bash "$script" > "$log_file" 2>&1
+    rc=$?
+  fi
+
+  SCRIPTS=$((SCRIPTS + 1))
+  local status
+  if [[ $rc -eq 0 ]]; then
+    status="pass"
+    PASS=$((PASS + 1))
+    (( QUIET == 0 )) && printf '  %s✓ PASS%s %s/%s (log: %s)\n\n' "$C_GRN" "$C_RST" "$cat" "$name" "$log_file"
+  else
+    status="fail"
+    FAIL=$((FAIL + 1))
+    (( QUIET == 0 )) && printf '  %s✗ FAIL%s %s/%s (rc=%d log: %s)\n' "$C_RED" "$C_RST" "$cat" "$name" "$rc" "$log_file"
+    # Mostra últimas 10 linhas do log na falha pra debug rápido
+    if (( QUIET == 0 && VERBOSE == 0 )); then
+      printf '%s' "$C_DIM"
+      tail -10 "$log_file" 2>/dev/null | sed 's/^/      /'
+      printf '%s\n' "$C_RST"
+    fi
+  fi
+
+  RESULTS_CAT+=("$cat")
+  RESULTS_NAME+=("$name")
+  RESULTS_STATUS+=("$status")
+
+  # Append summary.txt incrementalmente
+  printf '%s %s/%s\n' "$(echo "$status" | tr '[:lower:]' '[:upper:]')" "$cat" "$name" >> "$SUMMARY_TXT"
+
+  return $rc
+}
+
+ABORTED=0
+for cat in "${SELECTED[@]}"; do
+  # Caso especial: unit delega pra unit/run.sh (se existir)
+  if [[ "$cat" == "unit" ]]; then
+    if [[ -x "$TESTS_DIR/unit/run.sh" ]]; then
+      run_one "unit" "$TESTS_DIR/unit/run.sh" || true
+      if (( FAIL_FAST == 1 && FAIL > 0 )); then ABORTED=1; break; fi
+    else
+      (( QUIET == 0 )) && note "unit/run.sh não executável — skip categoria"
+    fi
+    continue
+  fi
+
+  # Caso especial: simulated delega pra simulated/run.py se existir
+  if [[ "$cat" == "simulated" && -x "$TESTS_DIR/simulated/run.py" ]]; then
+    (( QUIET == 0 )) && note "delegando simulated/ pra Python engine"
+    local_log="$LOG_DIR/simulated-engine.log"
+    if python3 "$TESTS_DIR/simulated/run.py" > "$local_log" 2>&1; then
+      RESULTS_CAT+=("simulated"); RESULTS_NAME+=("engine"); RESULTS_STATUS+=("pass")
+      PASS=$((PASS + 1)); SCRIPTS=$((SCRIPTS + 1))
+      printf 'PASS simulated/engine\n' >> "$SUMMARY_TXT"
+    else
+      RESULTS_CAT+=("simulated"); RESULTS_NAME+=("engine"); RESULTS_STATUS+=("fail")
+      FAIL=$((FAIL + 1)); SCRIPTS=$((SCRIPTS + 1))
+      printf 'FAIL simulated/engine\n' >> "$SUMMARY_TXT"
+      if (( FAIL_FAST == 1 )); then ABORTED=1; break; fi
+    fi
+    continue
+  fi
+
+  mapfile -t SCRIPTS_LIST < <(list_scripts_for_category "$cat")
+  if [[ ${#SCRIPTS_LIST[@]} -eq 0 ]]; then
+    (( QUIET == 0 )) && note "categoria '$cat' sem scripts (placeholder) — skip"
+    continue
+  fi
+
+  for s in "${SCRIPTS_LIST[@]}"; do
+    run_one "$cat" "$s" || true
+    if (( FAIL_FAST == 1 && FAIL > 0 )); then ABORTED=1; break 2; fi
+  done
+done
+
+# ── Finalização: summary.json + run-totals.txt ─────────────────────────
+FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+FINISHED_EPOCH="$(date +%s)"
+DURATION=$((FINISHED_EPOCH - STARTED_EPOCH))
+
+EXIT_CODE=0
+(( FAIL > 0 )) && EXIT_CODE=1
+
+# summary.json — schema fixo §22.2. Construído via python3 pra robustez
+# (jq sem -n pra arrays vazios é chato e ainda escapa).
+python3 - <<PY
+import json, os, sys
+
+scripts = []
+cats   = """${RESULTS_CAT[@]+${RESULTS_CAT[@]}}""".split()
+names  = """${RESULTS_NAME[@]+${RESULTS_NAME[@]}}""".split()
+status = """${RESULTS_STATUS[@]+${RESULTS_STATUS[@]}}""".split()
+
+for c, n, s in zip(cats, names, status):
+    scripts.append({"category": c, "name": n, "status": s})
+
+doc = {
+  "started_at": "${STARTED_AT}",
+  "finished_at": "${FINISHED_AT}",
+  "duration_seconds": ${DURATION},
+  "mode": "${MODE}",
+  "log_dir": "${LOG_DIR}",
+  "scripts": scripts,
+  "totals": {
+    "pass": ${PASS},
+    "fail": ${FAIL},
+    "scripts": ${SCRIPTS},
+    "exit_code": ${EXIT_CODE}
+  }
+}
+
+with open("${LOG_DIR}/summary.json", "w") as fh:
+    json.dump(doc, fh, indent=2)
+PY
+
+# run-totals.txt — formato fixo (8 linhas chave=valor) pra parsers de CI.
+{
+  echo "mode=$MODE"
+  echo "started=$STARTED_AT"
+  echo "finished=$FINISHED_AT"
+  echo "duration=$DURATION"
+  echo "scripts=$SCRIPTS"
+  echo "pass=$PASS"
+  echo "fail=$FAIL"
+  echo "exit=$EXIT_CODE"
+} > "$LOG_DIR/run-totals.txt"
+
+# ── Resultado final ─────────────────────────────────────────────────────
+(( QUIET == 0 )) && echo
+if (( FAIL == 0 )); then
+  note "${C_GRN}OK${C_RST} mode=$MODE scripts=$SCRIPTS pass=$PASS fail=$FAIL duration=${DURATION}s"
+  note "logs: $LOG_DIR"
+  exit 0
+fi
+
+# Banner ENORME na falha (impossível ignorar em CI)
+if (( QUIET == 0 )); then
+  echo
+  bar="$(printf '█%.0s' $(seq 1 78))"
+  printf '%s%s%s\n' "$C_RED$C_BOLD" "$bar" "$C_RST"
+  printf '%s   FAIL   mode=%s  pass=%d  fail=%d  scripts=%d  duration=%ds%s\n' \
+    "$C_RED$C_BOLD" "$MODE" "$PASS" "$FAIL" "$SCRIPTS" "$DURATION" "$C_RST"
+  printf '%s%s%s\n' "$C_RED$C_BOLD" "$bar" "$C_RST"
+  echo
+  echo "Failed scripts:"
+  for i in "${!RESULTS_STATUS[@]}"; do
+    if [[ "${RESULTS_STATUS[$i]}" == "fail" ]]; then
+      printf '  %s✗%s %s/%s  → %s/%s-%s.log\n' "$C_RED" "$C_RST" \
+        "${RESULTS_CAT[$i]}" "${RESULTS_NAME[$i]}" \
+        "$LOG_DIR" "${RESULTS_CAT[$i]}" "${RESULTS_NAME[$i]}"
+    fi
+  done
+  echo
+  note "logs: $LOG_DIR"
+fi
+
+(( ABORTED == 1 )) && note "ABORTED (--fail-fast)"
+exit 1

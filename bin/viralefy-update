@@ -433,14 +433,27 @@ fi
 
 log "deploy ok ✓"
 
-# Smoke check pós-deploy: contrato HTTP dos 3 services + endpoint público
-# + auth gate. Falha aqui é grave — não fazemos rollback automático (o
-# healthcheck loopback já passou), mas devolvemos exit 1 pra CI/operador
-# investigar antes de declarar deploy verde.
+# Smoke check pós-deploy: contrato HTTP dos services + endpoint público +
+# auth gate + WAF + JWKS + observability + checkout E2E. Falha aqui é
+# grave — não fazemos rollback automático (o healthcheck loopback já
+# passou), mas devolvemos exit 1 pra CI/operador investigar antes de
+# declarar deploy verde.
+#
+# Preferência: viralefy-test smoke (CLI estruturado, summary.json,
+# 9 scripts categóricos — §22 das diretrizes). Fallback pro viralefy-smoke
+# legado em hosts que ainda não receberam o CLI novo (transição).
+TEST_BIN="/usr/local/sbin/viralefy-test"
 SMOKE_BIN="/usr/local/sbin/viralefy-smoke"
-[[ -x "$SMOKE_BIN" ]] || SMOKE_BIN="$ROOT_DIR/ops/bin/viralefy-smoke"
-if [[ -x "$SMOKE_BIN" ]]; then
-  log "rodando smoke check ($SMOKE_BIN)"
+if [[ -x "$TEST_BIN" ]]; then
+  log "rodando smoke tests ($TEST_BIN smoke)"
+  if ! "$TEST_BIN" smoke; then
+    echo "[warn] smoke FALHOU — services up mas contrato HTTP quebrado"
+    echo "[warn] considere rollback. Logs em /var/log/viralefy/test-*"
+    echo "[warn] investigue: 'journalctl -u viralefy-{api,payments,sender,core,auth,dispatcher} -n 50'"
+    exit 1
+  fi
+elif [[ -x "$SMOKE_BIN" ]]; then
+  log "rodando smoke check legado ($SMOKE_BIN)"
   if ! "$SMOKE_BIN"; then
     echo "[warn] smoke falhou — services up mas contrato HTTP quebrado"
     echo "[warn] investigue 'journalctl -u viralefy-{api,payments,sender} -n 50'"

@@ -55,9 +55,28 @@ install_systemd() {
   # /viralefy/ops durante o update destrutivo.
   for cmd in \
       viralefy-update viralefy-status viralefy-logs viralefy-smoke \
+      viralefy-test \
       viralefy-backup viralefy-backup-verify viralefy-restore-drill; do
-    install -m 0755 -o root -g root "$ops_dir/bin/$cmd" "/usr/local/sbin/$cmd"
+    if [[ -f "$ops_dir/bin/$cmd" ]]; then
+      install -m 0755 -o root -g root "$ops_dir/bin/$cmd" "/usr/local/sbin/$cmd"
+    fi
   done
+
+  # tests/ kit do viralefy-test fica em /opt/viralefy-tests pra ficar fora
+  # de /viralefy (que é wipado pelo update destrutivo) e ser independente
+  # do binário CLI (cada um pode ser atualizado standalone).
+  if [[ -d "$ops_dir/tests" ]]; then
+    install -d -m 0755 -o root -g root /opt/viralefy-tests
+    # rsync preferido (mantém perms + deleta órfãos). Fallback cp -a.
+    if command -v rsync >/dev/null 2>&1; then
+      rsync -a --delete "$ops_dir/tests/" /opt/viralefy-tests/
+    else
+      rm -rf /opt/viralefy-tests/*
+      cp -a "$ops_dir/tests/." /opt/viralefy-tests/
+    fi
+    find /opt/viralefy-tests -type f -name '*.sh' -exec chmod 755 {} +
+    info "tests kit instalado em /opt/viralefy-tests"
+  fi
 
   systemctl daemon-reload
   info "systemd recarregado"
