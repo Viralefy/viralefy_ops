@@ -1,0 +1,51 @@
+[Unit]
+Description=Viralefy — anonimização mensal de PII em orders >5y (LGPD Art. 16)
+Documentation=https://github.com/Viralefy/viralefy_ops
+Wants=network-online.target postgresql.service
+After=network-online.target postgresql.service viralefy-reconcile.service
+
+[Service]
+Type=oneshot
+# DATABASE_URL vem do .env compartilhado da app.
+# TEXTFILE_PATH é o caminho onde node_exporter coleta as métricas .prom.
+EnvironmentFile=/etc/viralefy/.env
+Environment=TEXTFILE_PATH=/var/lib/node_exporter/textfile_collector/viralefy_orders_anonymize.prom
+ExecStart=/usr/local/sbin/viralefy-orders-anonymize
+User=viralefy-core
+Group=viralefy
+
+# Falha sai com 1 (batch falhou meio do caminho) ou 2 (erro infra).
+# exit 0 = nada a fazer ou todos anonimizados OK.
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=15min
+
+# Hardening — escreve em DB + 1 arquivo .prom; sem mais nada.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/node_exporter/textfile_collector
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @debug @mount @cpu-emulation @obsolete
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

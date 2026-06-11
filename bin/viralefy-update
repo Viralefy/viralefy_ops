@@ -218,7 +218,7 @@ fi
 # diferem do pkg ("viralefy-reconcile", "viralefy-user-deletion") porque
 # são CLIs separados, não o daemon. Tolerante: se cmd/ não existir, skip
 # silencioso (clients < migration 042/043). Antes era scp manual.
-PID_RECON=""; PID_UDEL=""
+PID_RECON=""; PID_UDEL=""; PID_OANON=""; PID_TCLEAN=""
 if [[ -d "$NEXT_DIR/core" ]]; then
   build_core_cron viralefy-reconcile reconcile-cron \
     > /tmp/build-reconcile.log 2>&1 &
@@ -226,6 +226,14 @@ if [[ -d "$NEXT_DIR/core" ]]; then
   build_core_cron viralefy-user-deletion user-deletion-cron \
     > /tmp/build-user-deletion.log 2>&1 &
   PID_UDEL=$!
+  build_core_cron viralefy-orders-anonymize orders-anonymize-cron \
+    > /tmp/build-orders-anonymize.log 2>&1 &
+  PID_OANON=$!
+  # 2026-06-11: cleanup hourly de fixtures *@viralefy.test deixadas pelo
+  # smoke E2E (POST /v1/checkout regression test Coraza FP 942100).
+  build_core_cron viralefy-test-cleanup test-cleanup-cron \
+    > /tmp/build-test-cleanup.log 2>&1 &
+  PID_TCLEAN=$!
 fi
 if [[ -d "$NEXT_DIR/auth" ]]; then
   build_go_svc auth cmd/auth > /tmp/build-auth.log 2>&1 &
@@ -262,6 +270,12 @@ if [[ -n "$PID_RECON" ]]; then
 fi
 if [[ -n "$PID_UDEL" ]]; then
   wait $PID_UDEL || { echo "[warn] FALHA build user-deletion-cron (não bloqueia legacy)"; tail -20 /tmp/build-user-deletion.log; PHASE9_FAIL=1; }
+fi
+if [[ -n "$PID_OANON" ]]; then
+  wait $PID_OANON || { echo "[warn] FALHA build orders-anonymize-cron (não bloqueia legacy)"; tail -20 /tmp/build-orders-anonymize.log; PHASE9_FAIL=1; }
+fi
+if [[ -n "$PID_TCLEAN" ]]; then
+  wait $PID_TCLEAN || { echo "[warn] FALHA build test-cleanup-cron (não bloqueia legacy)"; tail -20 /tmp/build-test-cleanup.log; PHASE9_FAIL=1; }
 fi
 
 if [[ $FAIL -eq 1 ]]; then
@@ -305,7 +319,7 @@ done
 # Backup do binário anterior antes do replace pra rollback rápido se o cron
 # crashar (timer não tem healthcheck loopback). install já é atomic (rename
 # via syscall) mas o .prev sobrevive ao swap pra inspeção / rollback manual.
-for cron_bin in viralefy-reconcile viralefy-user-deletion; do
+for cron_bin in viralefy-reconcile viralefy-user-deletion viralefy-orders-anonymize viralefy-test-cleanup; do
   src="$ROOT_DIR/core/bin/$cron_bin"
   dst="/usr/local/sbin/$cron_bin"
   if [[ -x "$src" ]]; then
@@ -321,6 +335,16 @@ done
 "$ROOT_DIR/ops/installer/60-systemd.sh" >/dev/null 2>&1 || \
   bash "$ROOT_DIR/ops/installer/60-systemd.sh" >/dev/null 2>&1 || true
 systemctl daemon-reload
+
+# Garante que timers PHASE-9 estejam enabled — idempotente. Hosts antigos
+# podem nunca ter enabled o orders-anonymize na primeira passagem; este
+# loop conserta sem precisar de runbook manual.
+for timer in viralefy-reconcile.timer viralefy-user-deletion.timer viralefy-orders-anonymize.timer viralefy-test-cleanup.timer; do
+  if [[ -f "/etc/systemd/system/$timer" ]]; then
+    systemctl enable "$timer" >/dev/null 2>&1 || true
+    systemctl start  "$timer" >/dev/null 2>&1 || true
+  fi
+done
 
 # Sincroniza Caddyfile (ops repo é a source of truth). Sem isso, mudanças
 # em handle_path / reverse_proxy / new route não chegam em prod sem ssh

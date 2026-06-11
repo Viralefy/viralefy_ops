@@ -39,7 +39,9 @@ install_systemd() {
   # à existência do binário (host sem core ignora silenciosamente).
   for unit in \
       viralefy-reconcile.service viralefy-reconcile.timer \
-      viralefy-user-deletion.service viralefy-user-deletion.timer; do
+      viralefy-user-deletion.service viralefy-user-deletion.timer \
+      viralefy-orders-anonymize.service viralefy-orders-anonymize.timer \
+      viralefy-test-cleanup.service viralefy-test-cleanup.timer; do
     if [[ -f "$src/$unit" ]]; then
       install -m 0644 -o root -g root "$src/$unit" "/etc/systemd/system/$unit"
     fi

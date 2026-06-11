@@ -1,0 +1,22 @@
+[Unit]
+Description=Viralefy — disparador mensal da anonimização de orders >5y
+Documentation=https://github.com/Viralefy/viralefy_ops
+
+[Timer]
+# Todo dia 1 do mês às 04:30 UTC — DEPOIS do user-deletion (03:45 UTC com
+# 15min jitter), garantindo que orders de users excluídos já foram
+# anonimizados pela cascata desse outro cron. Mensal porque o universo
+# de "rows novas elegíveis" em 30 dias é pequeno (rotatividade de 5y é
+# linear), e segurar uma UPDATE em massa diariamente é desperdício.
+#
+# Em caso de overlap o unit do orders-anonymize espera porque o service
+# tem After=viralefy-reconcile.service (cadeia transitiva).
+OnCalendar=*-*-01 04:30:00 UTC
+RandomizedDelaySec=30min
+# Catch-up se a máquina estiver desligada no dia 1 — LGPD não tolera
+# atraso indefinido. Persistent garante que o próximo boot dispara.
+Persistent=true
+Unit=viralefy-orders-anonymize.service
+
+[Install]
+WantedBy=timers.target
