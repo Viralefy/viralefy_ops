@@ -162,6 +162,117 @@ www.{$DOMAIN_FRONT} {
 	}
 }
 
+# ---------------- Auth (identidade unificada) ---------------- #
+# 2026-06-11 — `auth.viralefy.com` é o host dedicado para identidade.
+# Serve apenas `/v1/auth/*` + `/.well-known/jwks.json` proxy-passando pro
+# dispatcher (que delega ao viralefy_auth :8083). Resto retorna 404.
+#
+# Por que separar de api.viralefy.com:
+#   - Identidade tem CORS/CSP/COOP separados (auth flow vai precisar
+#     POST-redirect-GET pra SSO futuro, cookies httponly etc.).
+#   - Token de admin e user são MINTED aqui; isolar a superfície de ataque
+#     do resto da API (que serve marketplace, pagamentos etc.).
+#   - Permite mover front + backoffice para `NEXT_PUBLIC_AUTH_URL` sem
+#     mexer no `NEXT_PUBLIC_API_URL` (graceful rollout, env por env).
+#
+# DNS: até existir um A/AAAA pra auth.viralefy.com, Caddy serve TLS via
+# Let's Encrypt assim que o registro for criado. Front/backoffice já
+# conseguem apontar pra esse host sem aguardar — `NEXT_PUBLIC_AUTH_URL`
+# default cai pra api.viralefy.com como fallback (vide front/backoffice
+# lib/api.ts).
+{$DOMAIN_AUTH:auth.viralefy.com} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin"
+		Cross-Origin-Opener-Policy "same-origin"
+		# Auth serve só JSON. Mesma postura do API host.
+		Cross-Origin-Resource-Policy "same-site"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), interest-cohort=(), browsing-topics=(), payment=(), usb=()"
+		-Server
+		-X-Powered-By
+	}
+
+	# WAF — mesmas exclusions do api host (login + register são FP-heavy
+	# por causa de tokens Turnstile / cookies GA).
+	coraza_waf {
+		directives `
+			Include /etc/caddy/coraza/coraza.conf
+			Include /etc/caddy/coraza/crs/crs-setup.conf
+			Include /etc/caddy/coraza/coraza-crs-exclusions.conf
+			Include /etc/caddy/coraza/crs/rules/*.conf
+		`
+	}
+
+	# CORS — replica o do api host. Origin reflectido se presente.
+	@cors_preflight_auth {
+		method OPTIONS
+		header Origin *
+	}
+	handle @cors_preflight_auth {
+		header {
+			Access-Control-Allow-Origin "{header.Origin}"
+			Access-Control-Allow-Credentials "true"
+			Access-Control-Allow-Methods "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+			Access-Control-Allow-Headers "Content-Type, Authorization, X-Request-Id, Idempotency-Key, Accept, Accept-Language, User-Agent"
+			Access-Control-Max-Age "600"
+			Vary "Origin"
+		}
+		respond "" 204 {
+			close
+		}
+	}
+	@has_origin_auth header Origin *
+	header @has_origin_auth {
+		Access-Control-Allow-Origin "{header.Origin}"
+		Access-Control-Allow-Credentials "true"
+		Vary "Origin"
+	}
+
+	# Defesa em profundidade: /internal/* nunca vaza.
+	@internal_auth path /internal/*
+	handle @internal_auth {
+		respond "Not Found" 404 {
+			close
+		}
+	}
+
+	# JWKS — direto pro auth, com cache 60s no edge.
+	handle /.well-known/jwks.json {
+		header Cache-Control "public, max-age=60, stale-while-revalidate=300"
+		reverse_proxy 127.0.0.1:8083 {
+			header_up X-Real-IP {http.request.remote.host}
+		}
+	}
+
+	# Health pra balanceadores externos. Não exige WAF.
+	handle /health {
+		reverse_proxy 127.0.0.1:8083 {
+			header_up X-Real-IP {http.request.remote.host}
+		}
+	}
+
+	# Rotas de auth — via dispatcher (mantém JWT issuance dual-sign,
+	# rate limit, observability). Default 404 pra qualquer outro path.
+	handle /v1/auth* {
+		reverse_proxy 127.0.0.1:8090 {
+			header_up X-Real-IP {http.request.remote.host}
+		}
+	}
+
+	# Default — 404 explícito (auth host só responde auth).
+	respond "Not Found" 404 {
+		close
+	}
+
+	log {
+		output stderr
+		format json
+	}
+}
+
 # ---------------- API ---------------- #
 {$DOMAIN_API} {
 	encode zstd gzip
