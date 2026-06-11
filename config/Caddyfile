@@ -98,10 +98,16 @@ www.{$DOMAIN_FRONT} {
 		Content-Security-Policy "frame-ancestors 'none'"
 		Permissions-Policy "interest-cohort=(), browsing-topics=()"
 		Cross-Origin-Opener-Policy "same-origin"
-		# Pentest #7: backoffice é sistema fechado (sem GTM, sem 3rd-party JS)
-		# então podemos usar require-corp + same-origin sem regressão. Cross-
-		# origin isolated context habilita SharedArrayBuffer e mitiga Spectre.
-		Cross-Origin-Embedder-Policy "require-corp"
+		# COEP require-corp DESLIGADO (2026-06-11): bloqueava o loader do
+		# Cloudflare Turnstile (challenges.cloudflare.com/turnstile/v0/api.js)
+		# usado no /login admin — Turnstile não envia Cross-Origin-Resource-
+		# Policy header, então com require-corp o browser refusa o script e o
+		# captcha nunca aparece (UX: "can't login" + CORS error no console).
+		# Reativar quando Turnstile passar a enviar CORP (issue Cloudflare aberto)
+		# ou quando o admin migrar pra solução self-hosted de captcha.
+		#
+		# COOP same-origin continua = ainda isola o contexto contra leitura
+		# cross-origin. CORP same-origin permanece restritivo no nosso lado.
 		Cross-Origin-Resource-Policy "same-origin"
 		-Server
 		-X-Powered-By
