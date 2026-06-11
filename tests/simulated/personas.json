@@ -1,0 +1,91 @@
+{
+  "version": "1",
+  "notes": [
+    "Persona descreve QUEM faz a request — usado pra montar Authorization e classificar resposta.",
+    "expected_access: para cada `category` do routes-inventory, 'allow' = persona deveria conseguir entrar (status no expected_status non-401/403); 'deny' = persona deveria bater 401 ou 403.",
+    "auth.kind: 'none' | 'jwt-user' | 'jwt-admin' | 'api-key' | 'internal-token'.",
+    "Tokens reais são minted antes de cada run via tests/simulated/setup.sh (lê DATABASE_URL e gera JWT efêmero usando viralefy_auth helper, ou usa variáveis VIRALEFY_SIM_TOKEN_*).",
+    "Persona 'anonymous' não tem token — header Authorization é omitido.",
+    "Persona 'bad_jwt' carrega um token sintaticamente válido mas assinatura inválida — esperado 401 sempre."
+  ],
+  "personas": [
+    {
+      "name": "anonymous",
+      "auth": {"kind": "none"},
+      "expected_access": {
+        "health":         "allow",
+        "public":         "allow",
+        "webhook":        "allow",
+        "authenticated":  "deny",
+        "admin":          "deny",
+        "b2b":            "deny",
+        "internal":       "deny"
+      }
+    },
+    {
+      "name": "normal_user",
+      "auth": {"kind": "jwt-user", "subject_kind": "user", "token_env": "VIRALEFY_SIM_TOKEN_USER"},
+      "expected_access": {
+        "health":         "allow",
+        "public":         "allow",
+        "webhook":        "allow",
+        "authenticated":  "allow",
+        "admin":          "deny",
+        "b2b":            "deny",
+        "internal":       "deny"
+      }
+    },
+    {
+      "name": "normal_admin",
+      "auth": {"kind": "jwt-admin", "subject_kind": "admin", "role": "admin", "token_env": "VIRALEFY_SIM_TOKEN_ADMIN"},
+      "expected_access": {
+        "health":         "allow",
+        "public":         "allow",
+        "webhook":        "allow",
+        "authenticated":  "deny",
+        "admin":          "partial",
+        "b2b":            "deny",
+        "internal":       "deny"
+      }
+    },
+    {
+      "name": "superadmin",
+      "auth": {"kind": "jwt-admin", "subject_kind": "admin", "role": "superadmin", "token_env": "VIRALEFY_SIM_TOKEN_SUPERADMIN"},
+      "expected_access": {
+        "health":         "allow",
+        "public":         "allow",
+        "webhook":        "allow",
+        "authenticated":  "deny",
+        "admin":          "allow",
+        "b2b":            "deny",
+        "internal":       "deny"
+      }
+    },
+    {
+      "name": "bad_jwt",
+      "auth": {"kind": "jwt-user", "subject_kind": "user", "token_literal": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzaW0ifQ.SIMTEST_invalid_signature"},
+      "expected_access": {
+        "health":         "allow",
+        "public":         "allow",
+        "webhook":        "allow",
+        "authenticated":  "deny",
+        "admin":          "deny",
+        "b2b":            "deny",
+        "internal":       "deny"
+      }
+    },
+    {
+      "name": "b2b_key",
+      "auth": {"kind": "api-key", "header": "X-API-Key", "token_env": "VIRALEFY_SIM_API_KEY"},
+      "expected_access": {
+        "health":         "allow",
+        "public":         "allow",
+        "webhook":        "allow",
+        "authenticated":  "deny",
+        "admin":          "deny",
+        "b2b":            "allow",
+        "internal":       "deny"
+      }
+    }
+  ]
+}

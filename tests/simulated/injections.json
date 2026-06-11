@@ -1,0 +1,189 @@
+{
+  "version": "1",
+  "notes": [
+    "Cada injection é aplicada de acordo com seu `type`:",
+    "  control:        baseline (sem payload malicioso) — todo cruzamento começa aqui.",
+    "  sqli/xss/path/encoding/size: vai como query string ?q=<value> em GETs e como campo `q` no body JSON em POST/PUT/PATCH; também substitui valores em path params {id}.",
+    "  mass_assign:    em métodos com body (POST/PUT/PATCH), mescla `extra_fields` no body — testa se backend aceita campos privilegiados.",
+    "  header_smuggle: injeta cabeçalho extra (Host, X-Forwarded-For, X-Original-URL).",
+    "Engine espera 4xx (400/401/403/404/422) ou rate-limit (429) em todas as injections não-control — 200/2xx em injection = REVIEW."
+  ],
+  "injections": [
+    {
+      "name": "baseline",
+      "type": "control",
+      "value": null,
+      "description": "Sem payload — sanity check"
+    },
+    {
+      "name": "sql_or_1_1",
+      "type": "sqli",
+      "value": "' OR 1=1 --",
+      "description": "Clássico SQLi OR-true"
+    },
+    {
+      "name": "sql_drop_table",
+      "type": "sqli",
+      "value": "'; DROP TABLE users CASCADE; --",
+      "description": "Tentativa de DROP destrutivo"
+    },
+    {
+      "name": "sql_union_select",
+      "type": "sqli",
+      "value": "' UNION SELECT password_hash FROM admins --",
+      "description": "UNION pra exfil"
+    },
+    {
+      "name": "sql_time_delay",
+      "type": "sqli",
+      "value": "'; SELECT pg_sleep(5); --",
+      "description": "Blind SQLi com delay"
+    },
+    {
+      "name": "xss_script_tag",
+      "type": "xss",
+      "value": "<script>alert(1)</script>",
+      "description": "XSS script tag puro"
+    },
+    {
+      "name": "xss_img_onerror",
+      "type": "xss",
+      "value": "<img src=x onerror=alert(1)>",
+      "description": "XSS via onerror"
+    },
+    {
+      "name": "xss_svg_onload",
+      "type": "xss",
+      "value": "<svg onload=alert(1)>",
+      "description": "XSS via SVG"
+    },
+    {
+      "name": "xss_javascript_uri",
+      "type": "xss",
+      "value": "javascript:alert(1)",
+      "description": "JS URI scheme"
+    },
+    {
+      "name": "path_traversal_plain",
+      "type": "path",
+      "value": "../../etc/passwd",
+      "description": "Path traversal cru"
+    },
+    {
+      "name": "path_traversal_encoded",
+      "type": "path",
+      "value": "..%2f..%2fetc%2fpasswd",
+      "description": "Path traversal URL-encoded"
+    },
+    {
+      "name": "path_traversal_double",
+      "type": "path",
+      "value": "..%252f..%252fetc%252fpasswd",
+      "description": "Double-URL-encoded"
+    },
+    {
+      "name": "null_byte",
+      "type": "encoding",
+      "value": "test\u0000.txt",
+      "description": "NUL byte"
+    },
+    {
+      "name": "unicode_rtl_override",
+      "type": "encoding",
+      "value": "test‮txt.exe",
+      "description": "RTL override (homograph)"
+    },
+    {
+      "name": "crlf_injection",
+      "type": "encoding",
+      "value": "x\r\nSet-Cookie: pwn=1",
+      "description": "Response splitting / log injection"
+    },
+    {
+      "name": "long_string_10k",
+      "type": "size",
+      "value_repeat": {
+        "char": "A",
+        "count": 10000
+      },
+      "description": "Stress: 10k A"
+    },
+    {
+      "name": "long_string_100k",
+      "type": "size",
+      "value_repeat": {
+        "char": "B",
+        "count": 100000
+      },
+      "description": "Stress: 100k B (testa limites de body)"
+    },
+    {
+      "name": "deep_json",
+      "type": "size",
+      "value": "{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":1}}}}}}}}}",
+      "description": "JSON profundo"
+    },
+    {
+      "name": "mass_assign_is_admin",
+      "type": "mass_assign",
+      "extra_fields": {
+        "is_admin": true
+      },
+      "description": "Tenta promover via field oculto"
+    },
+    {
+      "name": "mass_assign_role",
+      "type": "mass_assign",
+      "extra_fields": {
+        "role": "superadmin"
+      },
+      "description": "Tenta atribuir role"
+    },
+    {
+      "name": "mass_assign_pw_hash",
+      "type": "mass_assign",
+      "extra_fields": {
+        "password_hash": "$2b$12$AAAAAAAAAAAAAAAAAAAAAA"
+      },
+      "description": "Tenta setar password_hash"
+    },
+    {
+      "name": "mass_assign_credits",
+      "type": "mass_assign",
+      "extra_fields": {
+        "credits": 999999,
+        "credit_balance_cents": 99999999
+      },
+      "description": "Inflar saldo"
+    },
+    {
+      "name": "mass_assign_id_override",
+      "type": "mass_assign",
+      "extra_fields": {
+        "id": "00000000-0000-0000-0000-000000000001"
+      },
+      "description": "Sobrescrever PK"
+    },
+    {
+      "name": "header_host_smuggle",
+      "type": "header_smuggle",
+      "header_name": "X-Forwarded-Host",
+      "header_value": "evil.example.com",
+      "description": "Host header smuggling"
+    },
+    {
+      "name": "header_original_url",
+      "type": "header_smuggle",
+      "header_name": "X-Original-URL",
+      "header_value": "/v1/admin/admins",
+      "description": "X-Original-URL bypass"
+    },
+    {
+      "name": "header_xff_internal",
+      "type": "header_smuggle",
+      "header_name": "X-Forwarded-For",
+      "header_value": "127.0.0.1",
+      "description": "Spoof loopback pra bypass"
+    }
+  ]
+}
