@@ -24,7 +24,20 @@
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "PHASE-9 services detail",
+      "tooltip": "Dashboard com paineis por microservice (core/auth/dispatcher/payments/sender/backoffice/front)",
+      "type": "link",
+      "url": "/d/viralefy-phase9"
+    }
+  ],
   "liveNow": false,
   "panels": [
     {
@@ -396,6 +409,116 @@
       ],
       "title": "Dispatcher 429 rate-limit hits (5m buckets)",
       "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Overhead introduzido pelo dispatcher (excluindo tempo upstream) — p95 por upstream. Métrica real dispatcher_overhead_seconds_bucket{upstream}. Target SLO: p95 <50ms.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 45 },
+      "id": 12,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum by (le, upstream) (rate(dispatcher_overhead_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{upstream}}",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.99, sum by (le, upstream) (rate(dispatcher_overhead_seconds_bucket[5m])))",
+          "legendFormat": "p99 {{upstream}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Dispatcher overhead p95/p99 by upstream (target <50ms)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Latência upstream (core/auth/payments) p95 vista pelo dispatcher. Métrica real dispatcher_upstream_seconds_bucket{upstream}. Útil pra distinguir latência de rede+app vs overhead próprio do dispatcher.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 45 },
+      "id": 13,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum by (le, upstream) (rate(dispatcher_upstream_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{upstream}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Dispatcher upstream latency p95 by target",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Idade do último tick do cron Stripe reconcile do core. Verde <5min, amarelo 5-10min, vermelho >10min. Gauge real viralefy_stripe_reconcile_last_run_timestamp.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 300 },
+              { "color": "red", "value": 600 }
+            ]
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 52 },
+      "id": 14,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "time() - viralefy_stripe_reconcile_last_run_timestamp",
+          "legendFormat": "Stripe reconcile age",
+          "refId": "A"
+        }
+      ],
+      "title": "Stripe reconcile last-run age (core cron)",
+      "type": "stat"
     }
   ],
   "refresh": "30s",
@@ -426,6 +549,6 @@
   "timezone": "",
   "title": "Viralefy — Reliability",
   "uid": "viralefy-reliability",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

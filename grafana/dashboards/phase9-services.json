@@ -1,0 +1,918 @@
+{
+  "_comment": "Viralefy — PHASE-9 services dashboard. Métricas REAIS expostas pelos microservices (verificadas via curl /metrics e /internal/metrics em prod). Filtra por label service= (injetada pelo Prometheus via static_configs em prometheus.yml). Métricas inexistentes (gateway_callbacks_total, sender_outbox_dispatch_total, dispatcher_rate_limit_429_total, JWT verify failures, JWKS cache, 2FA enroll, webhook signature) NÃO foram inventadas — ver _todo_metrics.",
+  "_todo_metrics": [
+    "viralefy-payments: gateway_callbacks_total{provider,status}, gateway_provider_lookup_duration_seconds — não expostos hoje, só http_requests_total/duration.",
+    "viralefy-sender: sender_outbox_dispatch_total{channel,status}, sender_outbox_queue_depth, sender_bounce_total — não expostos hoje.",
+    "viralefy-auth: auth_login_attempts_total{result}, auth_jwt_verify_failures_total, auth_2fa_enroll_total, auth_token_mint_total, auth_rate_limit_total — hoje só http_requests_total (com path=/v1/auth/login) e duration.",
+    "viralefy-dispatcher: dispatcher_rate_limit_429_total{route}, dispatcher_hotset_size, dispatcher_jwks_cache_hits_total — apenas dispatcher_overhead_seconds/upstream_seconds existem.",
+    "viralefy-core: db_query_duration_seconds_bucket{query_type} — declarado no roadmap mas ainda não emitido pelo core."
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "PHASE-9 microservices: core, auth, dispatcher, payments, sender, backoffice, front. Métricas reais por service (label injetada via prometheus.yml).",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "panels": [],
+      "title": "viralefy-core",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Top-10 paths por RPS no core. Path é template-safe (ex.: /v1/plans/{id}/reviews) — cardinalidade limitada.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "id": 101,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "topk(10, sum by (path) (rate(http_requests_total{service=\"viralefy-core\"}[5m])))",
+          "legendFormat": "{{path}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Core — RPS por path (top 10)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Latência p50/p95/p99 do core. Histograma http_request_duration_seconds_bucket.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 1, "showPoints": "never" },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "id": 102,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket{service=\"viralefy-core\"}[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{service=\"viralefy-core\"}[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{service=\"viralefy-core\"}[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "Core — Latency p50/p95/p99",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Idade do último tick do cron Stripe reconcile. Verde <5min, amarelo 5-10min, vermelho >10min. Métrica gauge viralefy_stripe_reconcile_last_run_timestamp (unix sec).",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 300 },
+              { "color": "red", "value": 600 }
+            ]
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 9 },
+      "id": 103,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "time() - viralefy_stripe_reconcile_last_run_timestamp",
+          "legendFormat": "age",
+          "refId": "A"
+        }
+      ],
+      "title": "Stripe reconcile — last run age",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Orders confirmados pelo Stripe reconcile (casos onde webhook foi perdido). Counter viralefy_stripe_reconcile_orders_confirmed_total — rate 1h.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "showPoints": "never" },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 9 },
+      "id": 104,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["sum"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "increase(viralefy_stripe_reconcile_orders_confirmed_total[1h])",
+          "legendFormat": "confirmed",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "increase(viralefy_stripe_reconcile_orders_checked_total[1h])",
+          "legendFormat": "checked",
+          "refId": "B"
+        }
+      ],
+      "title": "Stripe reconcile — orders checked/confirmed (1h buckets)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "5xx ratio do core (janela 5m). Métrica http_requests_total — ratio 5xx / total.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.001 },
+              { "color": "red", "value": 0.01 }
+            ]
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 0.1,
+          "decimals": 4
+        }
+      },
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 9 },
+      "id": 105,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(rate(http_requests_total{service=\"viralefy-core\",status=~\"5..\"}[5m])) / clamp_min(sum(rate(http_requests_total{service=\"viralefy-core\"}[5m])), 1)",
+          "legendFormat": "5xx ratio",
+          "refId": "A"
+        }
+      ],
+      "title": "Core — 5xx ratio (5m)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Linhas em plan_prices fora da fórmula USD * rate por moeda. Gauge viralefy_plan_price_drift_rows. Drift > 0 indica preço desincronizado com câmbio.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 10 }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 14 },
+      "id": 106,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "viralefy_plan_price_drift_rows",
+          "legendFormat": "{{currency_code}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Plan price drift rows by currency",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
+      "id": 200,
+      "panels": [],
+      "title": "viralefy-auth",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Tentativas de login — sucessos (200) vs falhas (401) — em /v1/auth/login e /v1/auth/user/login. Derivado de http_requests_total (não há métrica dedicada ainda).",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2, "showPoints": "never" },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
+      "id": 201,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(rate(http_requests_total{service=\"viralefy-auth\",path=~\"/v1/auth/.*login\",status=\"200\"}[5m]))",
+          "legendFormat": "login success",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(rate(http_requests_total{service=\"viralefy-auth\",path=~\"/v1/auth/.*login\",status=\"401\"}[5m]))",
+          "legendFormat": "login fail (401)",
+          "refId": "B"
+        }
+      ],
+      "title": "Auth — login attempts (success vs 401)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Rate de 429 do auth (rate-limit hits via path/status). Derivado de http_requests_total{status=429}.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 1, "showPoints": "never" },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
+      "id": 202,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (path) (increase(http_requests_total{service=\"viralefy-auth\",status=\"429\"}[5m]))",
+          "legendFormat": "{{path}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Auth — 429 rate-limit hits (5m buckets)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Latência p50/p95/p99 do auth. Histograma http_request_duration_seconds_bucket.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 1, "showPoints": "never" },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 30 },
+      "id": 203,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket{service=\"viralefy-auth\"}[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{service=\"viralefy-auth\"}[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{service=\"viralefy-auth\"}[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "Auth — Latency p50/p95/p99",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "JWKS endpoint hits (/.well-known/jwks.json) — proxy de uso de chave pública por consumers. Counter http_requests_total{path=/.well-known/jwks.json}.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2, "showPoints": "never" },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 30 },
+      "id": 204,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(rate(http_requests_total{service=\"viralefy-auth\",path=\"/.well-known/jwks.json\"}[5m]))",
+          "legendFormat": "jwks fetches",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(rate(http_requests_total{service=\"viralefy-auth\",path=~\"/v1/auth/user/register\",status=\"201\"}[5m]))",
+          "legendFormat": "user register success",
+          "refId": "B"
+        }
+      ],
+      "title": "Auth — JWKS fetches + user register",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 38 },
+      "id": 300,
+      "panels": [],
+      "title": "viralefy-dispatcher",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Dispatcher overhead p50/p95/p99 por upstream (target <50ms). Histograma dispatcher_overhead_seconds_bucket{upstream}.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 1, "showPoints": "never" },
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 39 },
+      "id": 301,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.50, sum by (le, upstream) (rate(dispatcher_overhead_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{upstream}}",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum by (le, upstream) (rate(dispatcher_overhead_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{upstream}}",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.99, sum by (le, upstream) (rate(dispatcher_overhead_seconds_bucket[5m])))",
+          "legendFormat": "p99 {{upstream}}",
+          "refId": "C"
+        }
+      ],
+      "title": "Dispatcher overhead p50/p95/p99 (target <50ms)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Latência upstream (core/auth/payments) vista pelo dispatcher. Histograma dispatcher_upstream_seconds_bucket{upstream}.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 1, "showPoints": "never" },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 39 },
+      "id": 302,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum by (le, upstream) (rate(dispatcher_upstream_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{upstream}}",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.99, sum by (le, upstream) (rate(dispatcher_upstream_seconds_bucket[5m])))",
+          "legendFormat": "p99 {{upstream}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Dispatcher — upstream latency p95/p99",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Status codes do dispatcher por status (RPS). Proxy de 429 (rate-limit), 401/403 (auth fail), 502 (upstream down). Derivado de http_requests_total{service=viralefy-dispatcher}.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 47 },
+      "id": 303,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (status) (rate(http_requests_total{service=\"viralefy-dispatcher\",path!=\"/metrics\",path!=\"/_health\"}[5m]))",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Dispatcher — RPS by status code",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 55 },
+      "id": 400,
+      "panels": [],
+      "title": "viralefy-payments",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Charges enviados ao endpoint interno /internal/v1/charge — sucesso vs erro. Derivado de http_requests_total (gateway_callbacks_total ainda não exposto).",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2, "showPoints": "never" },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 56 },
+      "id": 401,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (status) (rate(http_requests_total{service=\"viralefy-payments\",path=\"/internal/v1/charge\"}[5m]))",
+          "legendFormat": "charge {{status}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Payments — charges por status",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Latência p95/p99 do payments. Histograma http_request_duration_seconds_bucket.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 1, "showPoints": "never" },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 56 },
+      "id": 402,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.50, sum by (le, path) (rate(http_request_duration_seconds_bucket{service=\"viralefy-payments\",path!=\"/internal/metrics\",path!=\"/internal/health\"}[5m])))",
+          "legendFormat": "p50 {{path}}",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum by (le, path) (rate(http_request_duration_seconds_bucket{service=\"viralefy-payments\",path!=\"/internal/metrics\",path!=\"/internal/health\"}[5m])))",
+          "legendFormat": "p95 {{path}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Payments — latency p50/p95 by path",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 64 },
+      "id": 500,
+      "panels": [],
+      "title": "viralefy-sender",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Dispatch rate do sender via /internal/v1/send — derivado de http_requests_total (sender_outbox_dispatch_total ainda não exposto). Status 200 = enviado, !2xx = falha.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2, "showPoints": "never" },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 65 },
+      "id": 501,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (status) (rate(http_requests_total{service=\"viralefy-sender\",path=\"/internal/v1/send\"}[5m]))",
+          "legendFormat": "send {{status}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Sender — dispatch rate por status",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Latência p95 do sender. Histograma http_request_duration_seconds_bucket.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 1, "showPoints": "never" },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 65 },
+      "id": 502,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum by (le, path) (rate(http_request_duration_seconds_bucket{service=\"viralefy-sender\",path!=\"/internal/metrics\",path!=\"/internal/health\"}[5m])))",
+          "legendFormat": "p95 {{path}}",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.99, sum by (le, path) (rate(http_request_duration_seconds_bucket{service=\"viralefy-sender\",path!=\"/internal/metrics\",path!=\"/internal/health\"}[5m])))",
+          "legendFormat": "p99 {{path}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Sender — latency p95/p99 por path",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 73 },
+      "id": 600,
+      "panels": [],
+      "title": "viralefy-backoffice",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Top operações do backoffice por path (top 10 RPS). http_requests_total tem label service=viralefy-backoffice.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 74 },
+      "id": 601,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "topk(10, sum by (path) (rate(http_requests_total{service=\"viralefy-backoffice\",path!=\"/api/metrics\"}[5m])))",
+          "legendFormat": "{{path}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Backoffice — RPS por path (top 10)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Latência p95 do backoffice por path. Histograma http_request_duration_seconds_bucket.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 1, "showPoints": "never" },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 74 },
+      "id": 602,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum by (le, path) (rate(http_request_duration_seconds_bucket{service=\"viralefy-backoffice\",path!=\"/api/metrics\"}[5m])))",
+          "legendFormat": "p95 {{path}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Backoffice — latency p95 por path",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "5xx ratio do backoffice (janela 5m).",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.001 },
+              { "color": "red", "value": 0.01 }
+            ]
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 0.1,
+          "decimals": 4
+        }
+      },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 82 },
+      "id": 603,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(rate(http_requests_total{service=\"viralefy-backoffice\",status=~\"5..\"}[5m])) / clamp_min(sum(rate(http_requests_total{service=\"viralefy-backoffice\"}[5m])), 1)",
+          "legendFormat": "5xx ratio",
+          "refId": "A"
+        }
+      ],
+      "title": "Backoffice — 5xx ratio (5m)",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 88 },
+      "id": 700,
+      "panels": [],
+      "title": "viralefy-front",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Event loop lag do Next.js front (gauge). Métrica nodejs_eventloop_lag_seconds. >50ms = saturado.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 89 },
+      "id": 701,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "nodejs_eventloop_lag_seconds{service=~\"viralefy-front|viralefy-backoffice\"}",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Front/Backoffice — Node.js event loop lag",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Memória RSS + heap usado do front. Gauges process_resident_memory_bytes e process_heap_bytes{state=used}.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" },
+          "unit": "bytes"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 89 },
+      "id": 702,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "process_resident_memory_bytes{service=\"viralefy-front\"}",
+          "legendFormat": "RSS",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "process_heap_bytes{service=\"viralefy-front\",state=\"used\"}",
+          "legendFormat": "heap used",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "process_heap_bytes{service=\"viralefy-front\",state=\"total\"}",
+          "legendFormat": "heap total",
+          "refId": "C"
+        }
+      ],
+      "title": "Front — memory (RSS + heap)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 97 },
+      "id": 800,
+      "panels": [],
+      "title": "Cross-service correlation",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "RPS total por service lado a lado (exclui /metrics e /health). Permite comparar carga relativa.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2, "showPoints": "never" },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 98 },
+      "id": 801,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (service) (rate(http_requests_total{service=~\"viralefy-.*\",path!~\"/metrics|/internal/metrics|/api/metrics|/health|/_health|/internal/health|/internal/v1/health\"}[5m]))",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Cross — RPS por service (excl. health/metrics)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Latência p95 por service lado a lado. Histograma http_request_duration_seconds_bucket agregado por service.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 1, "showPoints": "never" },
+          "unit": "s"
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 98 },
+      "id": 802,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum by (le, service) (rate(http_request_duration_seconds_bucket{service=~\"viralefy-.*\"}[5m])))",
+          "legendFormat": "p95 {{service}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Cross — Latency p95 por service",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "5xx ratio por service (5m). Comparativo direto entre microservices.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2, "showPoints": "never" },
+          "unit": "percentunit",
+          "min": 0,
+          "decimals": 4
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 106 },
+      "id": 803,
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (service) (rate(http_requests_total{service=~\"viralefy-.*\",status=~\"5..\"}[5m])) / clamp_min(sum by (service) (rate(http_requests_total{service=~\"viralefy-.*\"}[5m])), 1)",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Cross — 5xx ratio por service",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "description": "Status up/down de todos os jobs PHASE-9 (scrape result). Métrica padrão Prometheus 'up' filtrada por job=viralefy-*.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "options": { "0": { "text": "DOWN", "color": "red" } }, "type": "value" },
+            { "options": { "1": { "text": "UP", "color": "green" } }, "type": "value" }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 106 },
+      "id": 804,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "up{job=~\"viralefy-.*\"}",
+          "legendFormat": "{{job}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Cross — service up/down",
+      "type": "stat"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["viralefy", "production", "phase9"],
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "Prometheus", "value": "Prometheus" },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Viralefy — PHASE-9 services",
+  "uid": "viralefy-phase9",
+  "version": 1,
+  "weekStart": ""
+}

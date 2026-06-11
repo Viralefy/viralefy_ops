@@ -13,26 +13,35 @@
 #   3. viralefy-sender   GET 127.0.0.1:8082/internal/health → 200
 #   4. GET /v1/plans (público, sem auth)                   → 200 + JSON array
 #   5. POST /v1/me/2fa/status (sem Bearer)                 → 401 (auth gate ok)
+#   6. POST /v1/checkout COM payload real + tracking       → 201 + order_id +
+#      payment_url. Regression test pra Coraza FP em tracking.landing_url
+#      (incidente 2026-06-10): CRS PL2 disparava 942100 (SQLi) na URL legítima
+#      do landing. Smoke replica EXATAMENTE o payload do CheckoutModal pra
+#      prevenir regressão silenciosa em mudanças de exclusion/ruleset.
+#      Cleanup dos test users (@viralefy.test) é feito pelo
+#      viralefy-test-cleanup.timer (hourly).
 #
-# Sem deps externas. Usa só curl + jq quando disponível (fallback grep).
+# Sem deps externas. Usa só curl + python3 (stdlib) — disponíveis em
+# qualquer host Debian.
 #
-# ─── HEALTH ENDPOINT MAPPING (DR drill 2026-06-10) ───────────────────────
-# Heterogeneity histórica: cada serviço expõe healthcheck num path
-# diferente, herdado da fase em que foi escrito. Smoke precisa conhecer
-# todos. TODO PHASE-10: padronizar TUDO em /health + 410 nos legados.
+# ─── HEALTH ENDPOINT MAPPING (PHASE-10 unification 2026-06-11) ───────────
+# Migração pra /health unificado em 2026-06-11; cada service ganhou um
+# alias `/health` que reusa o handler existente. Os paths legados continuam
+# respondendo (backward compat — TX retention pra Uptime Robot, dashboards
+# antigos e systemd probes que ainda chamam o path original).
 #
-#   svc                  port   path                    convention
-#   ────────────────────────────────────────────────────────────────────
-#   viralefy-api         8080   /health                 Fase 4 (chi)
-#   viralefy-core        8084   /health                 PHASE-9 (mesma)
-#   viralefy-payments    8081   /internal/health        Fase 8 (loopback)
-#   viralefy-sender      8082   /internal/health        Fase 8 (loopback)
-#   viralefy-auth        8083   /internal/v1/health     PHASE-9 (versionado)
-#   viralefy-dispatcher  8090   /_health                PHASE-9 (Rust hyper)
+#   svc                  port   path canônico  paths aceitos (alias + legacy)
+#   ──────────────────────────────────────────────────────────────────────────
+#   viralefy-api         8080   /health        /health                       (legacy nativo)
+#   viralefy-core        8084   /health        /health                       (já era /health)
+#   viralefy-payments    8081   /health        /health  + /internal/health
+#   viralefy-sender      8082   /health        /health  + /internal/health
+#   viralefy-auth        8083   /health        /health  + /internal/v1/health
+#   viralefy-dispatcher  8090   /health        /health  + /_health
 #
-# Por que não padronizar agora: legacy api (`/health`) é público em Caddy
-# pra healthcheck externo do Uptime Robot; trocar quebra alerting. Aliases
-# `/health` em payments/sender/auth/dispatcher é tech debt do PHASE-10.
+# Smoke usa o path canônico `/health` em todos os services. Entries legacy
+# permanecem nos comentários acima e nos próprios services pra TX retention
+# durante o rollout — não removê-los até PHASE-11 (410 nos legados).
 # ─────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -66,11 +75,13 @@ http_code() {
 }
 
 # ─── 1-3. Healths dos services ──────────────────────────────────────────
-note "health dos services (PHASE-9 stack)"
+# PHASE-10 (2026-06-11): paths unificados em /health. Endpoints legacy
+# continuam respondendo nos services, mas o smoke valida o caminho canônico.
+note "health dos services (/health unificado — PHASE-10)"
 for entry in \
-    "dispatcher http://$API_HOST/_health" \
-    "pay        http://$PAY_HOST/internal/health" \
-    "sender     http://$SND_HOST/internal/health"; do
+    "dispatcher http://$API_HOST/health" \
+    "pay        http://$PAY_HOST/health" \
+    "sender     http://$SND_HOST/health"; do
   svc="${entry%% *}"
   url="${entry##* }"
   code="$(http_code GET "$url")"
@@ -87,7 +98,7 @@ done
 note "upstream services (core + auth direto)"
 for entry in \
     "core       http://${VIRALEFY_CORE_HOST:-127.0.0.1:8084}/health" \
-    "auth       http://${VIRALEFY_AUTH_HOST:-127.0.0.1:8083}/internal/v1/health"; do
+    "auth       http://${VIRALEFY_AUTH_HOST:-127.0.0.1:8083}/health"; do
   svc="${entry%% *}"
   url="${entry##* }"
   code="$(http_code GET "$url")"
@@ -123,6 +134,127 @@ if [[ "$code" == "401" ]]; then
   ok "/v1/me/2fa/status (sem token) → 401"
 else
   bad "/v1/me/2fa/status (sem token) → $code (esperado 401)"
+fi
+
+# ─── 6. Checkout E2E com tracking real (regression test Coraza FP) ────────
+# Replica EXATAMENTE o payload que o CheckoutModal manda em prod, incluindo
+# tracking.landing_url no formato `https://www.viralefy.com/<lang>/<slug>`.
+# Esse formato é o que disparava Coraza CRS 942100 (SQLi) em 2026-06-10:
+# o `-` no slug + protocolo + path multi-segment confundia o detector. Smoke
+# precisa cobrir esse vetor pra qualquer mudança futura em exclusions/ruleset
+# falhar AQUI antes de chegar ao usuário real.
+#
+# Fail-soft: se /v1/plans ou /payment-methods estiverem temporariamente
+# indisponíveis, marcamos bad mas seguimos pro resultado final. Test users
+# usam pattern `*@viralefy.test` — cleanup automático via
+# viralefy-test-cleanup.timer (hourly).
+note "checkout E2E com tracking real (regression Coraza FP 2026-06-10)"
+
+# Extrai plan_id do response anterior (já temos /v1/plans em $TMPBODY)
+PLAN_ID=$(python3 -c "
+import json,sys
+try:
+    d=json.load(open('$TMPBODY'))
+    arr=d.get('data', d) if isinstance(d, dict) else d
+    print(arr[0].get('id','') if arr else '')
+except Exception:
+    print('')
+" 2>/dev/null)
+
+if [[ -z "$PLAN_ID" ]]; then
+  bad "checkout: não consegui extrair plan_id de /v1/plans"
+else
+  # Busca gateway_id (qualquer gateway active serve — preferencialmente
+  # crypto/Heleket pra evitar deps externas no test).
+  code="$(http_code GET "http://$API_HOST/v1/plans/$PLAN_ID/payment-methods")"
+  if [[ "$code" != "200" ]]; then
+    bad "checkout: /v1/plans/$PLAN_ID/payment-methods → $code (esperado 200)"
+  else
+    GW_ID=$(python3 -c "
+import json,sys
+try:
+    d=json.load(open('$TMPBODY'))
+    arr=d.get('data', d) if isinstance(d, dict) else d
+    # primeiro gateway com gateway_id presente
+    for m in (arr or []):
+        gid=m.get('gateway_id','')
+        if gid:
+            print(gid); break
+    else:
+        print('')
+except Exception:
+    print('')
+" 2>/dev/null)
+    if [[ -z "$GW_ID" ]]; then
+      bad "checkout: não consegui extrair gateway_id de payment-methods"
+    else
+      # Payload réplica do CheckoutModal — landing_url no formato que
+      # disparou o FP (slug com hyphen + path /<lang>/<service>).
+      STAMP=$(date +%s%N)
+      EMAIL="smoke-${STAMP}@viralefy.test"
+      PAYLOAD=$(cat <<JSON
+{
+  "plan_id": "$PLAN_ID",
+  "email": "$EMAIL",
+  "name": "Smoke Test",
+  "display_currency": "USD",
+  "payment_method": "gateway",
+  "gateway_id": "$GW_ID",
+  "pay_currency": "USDT",
+  "new_profile": {
+    "platform": "instagram",
+    "handle": "smoketest",
+    "display_name": "Smoke"
+  },
+  "tracking": {
+    "landing_url": "https://www.viralefy.com/us/instagram-followers",
+    "referrer": "https://google.com/",
+    "utm_source": "google",
+    "fbclid": "smoke-fbclid"
+  },
+  "country": "us",
+  "target_country": "us"
+}
+JSON
+)
+      code=$(curl -sS -o "$TMPBODY" -w '%{http_code}' \
+        --max-time 10 --connect-timeout 2 \
+        -X POST -H 'Content-Type: application/json' \
+        -H "Idempotency-Key: smoke-$STAMP" \
+        -d "$PAYLOAD" \
+        "http://$API_HOST/v1/checkout" 2>/dev/null) || code="000"
+      code="${code: -3}"
+
+      if [[ "$code" == "201" ]]; then
+        # Valida envelope: precisa de order_id + payment_url pra ser E2E real.
+        # Coraza FP retornaria 403 sem JSON, ou JSON sem esses campos.
+        ORDER_ID=$(python3 -c "
+import json
+try:
+    d=json.load(open('$TMPBODY'))
+    print((d.get('data') or d).get('order_id',''))
+except Exception:
+    print('')
+" 2>/dev/null)
+        PAY_URL=$(python3 -c "
+import json
+try:
+    d=json.load(open('$TMPBODY'))
+    print((d.get('data') or d).get('payment_url',''))
+except Exception:
+    print('')
+" 2>/dev/null)
+        if [[ -n "$ORDER_ID" ]] && [[ -n "$PAY_URL" ]]; then
+          ok "checkout E2E → 201 + order_id + payment_url"
+        else
+          bad "checkout E2E → 201 mas faltam fields (order_id='$ORDER_ID' payment_url='$PAY_URL')"
+        fi
+      else
+        bad "checkout E2E → $code (esperado 201)"
+        echo "    Body: $(head -c 200 "$TMPBODY")"
+      fi
+    fi
+  fi
 fi
 
 # ─── Resultado ────────────────────────────────────────────────────────────
