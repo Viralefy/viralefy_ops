@@ -1,0 +1,17 @@
+[Unit]
+Description=Viralefy — disparador hourly do cleanup de fixtures @viralefy.test
+Documentation=https://github.com/Viralefy/viralefy_ops
+
+[Timer]
+# A cada hora, no minuto 17 (offset arbitrário pra não colidir com backup
+# nem reconcile que rodam em XX:00/XX:30). Jitter de 5min pra evitar
+# sincronização sintética caso haja várias VPS no futuro.
+OnCalendar=*-*-* *:17:00 UTC
+RandomizedDelaySec=5min
+# Smoke roda só pós-deploy, então a fila normalmente é pequena (1-2 rows).
+# Persistent=true garante catch-up se a VPS estava off na hora marcada.
+Persistent=true
+Unit=viralefy-test-cleanup.service
+
+[Install]
+WantedBy=timers.target

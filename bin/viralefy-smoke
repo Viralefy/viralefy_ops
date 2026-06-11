@@ -150,8 +150,11 @@ fi
 # viralefy-test-cleanup.timer (hourly).
 note "checkout E2E com tracking real (regression Coraza FP 2026-06-10)"
 
-# Extrai plan_id do response anterior (já temos /v1/plans em $TMPBODY)
-PLAN_ID=$(python3 -c "
+# Re-fetch /v1/plans (TMPBODY foi sobrescrito pelos checks anteriores).
+code="$(http_code GET "http://$API_HOST/v1/plans")"
+PLAN_ID=""
+if [[ "$code" == "200" ]]; then
+  PLAN_ID=$(python3 -c "
 import json,sys
 try:
     d=json.load(open('$TMPBODY'))
@@ -160,6 +163,7 @@ try:
 except Exception:
     print('')
 " 2>/dev/null)
+fi
 
 if [[ -z "$PLAN_ID" ]]; then
   bad "checkout: não consegui extrair plan_id de /v1/plans"
