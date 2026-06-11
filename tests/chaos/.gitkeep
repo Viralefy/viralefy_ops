@@ -1,0 +1,4 @@
+# Placeholder. A categoria `chaos` será populada pelo agent N.
+# Cobertura prevista (§22.3): input-fuzz.sh, property-based.sh,
+# service-kill.sh (gated por VIRALEFY_CHAOS_ALLOW=1), db-disconnect.sh,
+# concurrent-load.sh.

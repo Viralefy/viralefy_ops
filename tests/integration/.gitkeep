@@ -1,0 +1,4 @@
+# Placeholder. A categoria `integration` será populada pelo agent N.
+# Cobertura prevista (§22.3): login real do superadmin com cookie, CRUD
+# course/user/subscription via API admin, upload de imagem, password reset.
+# Requer pré-seed: `viralefy test seed-superadmin`.
