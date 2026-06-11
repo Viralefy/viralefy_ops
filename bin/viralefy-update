@@ -158,6 +158,25 @@ build_node() {
   sudo -u "$user" -H bash -c "cd '$d' && npm ci --no-audit --no-fund --silent && npm run build --silent"
 }
 
+# Build de cron auxiliar do viralefy_core (reconcile, user-deletion). Mesmo
+# user/PATH do build_go_svc core, mas os binários têm nome próprio (não seguem
+# convenção viralefy-<pkg>) porque são CLIs distintos do daemon. Skip silencioso
+# se o cmd/ ainda não existe (clients pré-migrations 042/043).
+#
+# Args: <bin_name> <cmd_subdir>
+#   ex: build_core_cron viralefy-reconcile reconcile-cron
+build_core_cron() {
+  local bin="$1" sub="$2"
+  local d="$NEXT_DIR/core"
+  if [[ ! -d "$d/cmd/$sub" ]]; then
+    echo "[skip] build $bin: cmd/$sub ausente (HEAD < migration cron)"
+    return 0
+  fi
+  sudo -u viralefy-core -H env PATH="/usr/local/go/bin:$PATH" \
+    bash -c "cd '$d' && go build -trimpath -ldflags='-s -w' -o bin/$bin ./cmd/$sub"
+  echo "[ok] build $bin"
+}
+
 # Build de Rust binary (dispatcher). cargo é instalado por bootstrap.sh quando
 # PHASE-9 estiver ativo; se não tiver cargo, skip silencioso.
 build_rust_svc() {
@@ -197,22 +216,16 @@ if [[ -d "$NEXT_DIR/core" ]]; then
 fi
 # Crons auxiliares do core (Go) — build em background junto. Nomes
 # diferem do pkg ("viralefy-reconcile", "viralefy-user-deletion") porque
-# são CLIs separados, não o daemon.
+# são CLIs separados, não o daemon. Tolerante: se cmd/ não existir, skip
+# silencioso (clients < migration 042/043). Antes era scp manual.
 PID_RECON=""; PID_UDEL=""
 if [[ -d "$NEXT_DIR/core" ]]; then
-  d_core="$NEXT_DIR/core"
-  if [[ -d "$d_core/cmd/reconcile-cron" ]]; then
-    sudo -u viralefy-core -H env PATH="/usr/local/go/bin:$PATH" \
-      bash -c "cd '$d_core' && go build -trimpath -ldflags='-s -w' -o bin/viralefy-reconcile ./cmd/reconcile-cron" \
-      > /tmp/build-reconcile.log 2>&1 &
-    PID_RECON=$!
-  fi
-  if [[ -d "$d_core/cmd/user-deletion-cron" ]]; then
-    sudo -u viralefy-core -H env PATH="/usr/local/go/bin:$PATH" \
-      bash -c "cd '$d_core' && go build -trimpath -ldflags='-s -w' -o bin/viralefy-user-deletion ./cmd/user-deletion-cron" \
-      > /tmp/build-user-deletion.log 2>&1 &
-    PID_UDEL=$!
-  fi
+  build_core_cron viralefy-reconcile reconcile-cron \
+    > /tmp/build-reconcile.log 2>&1 &
+  PID_RECON=$!
+  build_core_cron viralefy-user-deletion user-deletion-cron \
+    > /tmp/build-user-deletion.log 2>&1 &
+  PID_UDEL=$!
 fi
 if [[ -d "$NEXT_DIR/auth" ]]; then
   build_go_svc auth cmd/auth > /tmp/build-auth.log 2>&1 &
@@ -289,10 +302,18 @@ for pkg in payments sender core auth dispatcher; do
   fi
 done
 # Crons auxiliares do core (timers systemd apontam pra estes binários).
+# Backup do binário anterior antes do replace pra rollback rápido se o cron
+# crashar (timer não tem healthcheck loopback). install já é atomic (rename
+# via syscall) mas o .prev sobrevive ao swap pra inspeção / rollback manual.
 for cron_bin in viralefy-reconcile viralefy-user-deletion; do
-  if [[ -x "$ROOT_DIR/core/bin/$cron_bin" ]]; then
-    install -m 0755 -o root -g root \
-      "$ROOT_DIR/core/bin/$cron_bin" "/usr/local/sbin/$cron_bin"
+  src="$ROOT_DIR/core/bin/$cron_bin"
+  dst="/usr/local/sbin/$cron_bin"
+  if [[ -x "$src" ]]; then
+    [[ -x "$dst" ]] && cp -f "$dst" "$dst.prev" 2>/dev/null || true
+    install -m 0755 -o root -g root "$src" "$dst"
+    log "installed $cron_bin → $dst"
+  else
+    log "skip install $cron_bin: $src ausente"
   fi
 done
 
