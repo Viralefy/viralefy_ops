@@ -1,0 +1,4 @@
+# Placeholder. A categoria `hardening` será populada pelo agent L.
+# Cobertura prevista (§22.3): tls-config.sh, headers-full.sh,
+# cookies.sh / cookie-attributes.sh, cors.sh, exposed-paths.sh,
+# default-creds.sh.

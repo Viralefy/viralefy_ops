@@ -1,0 +1,4 @@
+# Placeholder. A categoria `security` será populada pelo agent L.
+# Cobertura prevista (§22.3): auth bypass, headers de segurança (CSP,
+# X-Content-Type, HSTS), rate limit no login (50 paralelas → 429),
+# bcrypt cost ≥ 12, npm audit, JWT alg validation (RS256 only).
