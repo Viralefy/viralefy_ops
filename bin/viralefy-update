@@ -368,13 +368,27 @@ fi
 # refresh_tokens (em 039) é precondição de viralefy-auth subir. Sem isso,
 # auth crasha no schema assert e o cutover PHASE-9 falha.
 # Idempotente; falha hard em api migrate; tolerante a core ausente (legacy host).
+#
+# NOTA (.env perms): /etc/viralefy/.env é 0600 root:viralefy (segredo).
+# Os users viralefy-api / viralefy-core NÃO conseguem `source` o arquivo
+# diretamente (Permission denied → vars vazias → migrate tenta auth default
+# → "password authentication failed for user viralefy"). O script já está
+# rodando como root (sbin) e já carregou o .env via `set -a; source ...`
+# na seção "carregando segredos" lá em cima. Aqui exportamos a lista de
+# vars que o migrator precisa e passamos via `sudo --preserve-env=<lista>`
+# (sudo por padrão sanitiza o env, então a lista é explícita).
 log "migrations: api → core (precondição do auth)"
+# Vars de DB que os migrators consomem. Mantido como allowlist explícita
+# pra evitar vazar segredos não-DB (ex.: STRIPE_SECRET) pros migrators.
+MIGRATE_ENV=DATABASE_URL,DB_HOST,DB_PORT,DB_NAME,DB_USER,DB_PASSWORD,DB_SSLMODE,POSTGRES_DSN,VIRALEFY_DB_URL,VIRALEFY_CORE_DB_URL,VIRALEFY_API_DB_URL
 if [[ -x /viralefy/api/bin/viralefy-api ]]; then
-  sudo -u viralefy-api bash -c "set -a; source '$ENV_FILE'; set +a; /viralefy/api/bin/viralefy-api migrate up" \
+  sudo --preserve-env="$MIGRATE_ENV" -u viralefy-api \
+    /viralefy/api/bin/viralefy-api migrate up \
     || { echo "[fatal] viralefy-api migrate up falhou"; exit 1; }
 fi
 if [[ -x /usr/local/sbin/viralefy-core ]]; then
-  sudo -u viralefy-core bash -c "set -a; source '$ENV_FILE'; set +a; /usr/local/sbin/viralefy-core migrate up" \
+  sudo --preserve-env="$MIGRATE_ENV" -u viralefy-core \
+    /usr/local/sbin/viralefy-core migrate up \
     || { echo "[fatal] viralefy-core migrate up falhou — auth não vai subir"; exit 1; }
 fi
 
