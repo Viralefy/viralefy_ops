@@ -52,6 +52,17 @@ IFS=$'\n\t'
 API_HOST="${VIRALEFY_API_HOST:-127.0.0.1:8090}"
 PAY_HOST="${VIRALEFY_PAY_HOST:-127.0.0.1:8081}"
 SND_HOST="${VIRALEFY_SND_HOST:-127.0.0.1:8082}"
+# PHASE-17 (2026-06-14): novos checks de SSR/i18n/cookie batem no Next direto
+# (loopback 3000) ou via Caddy externo (FRONT_URL). Default: localhost SSR,
+# que é o que o systemd-deploy expõe pro smoke pós-update. Override em CI.
+FRONT_HOST="${VIRALEFY_FRONT_HOST:-127.0.0.1:3000}"
+
+# Self-check toggle. Quando = 1, o último passo do smoke executa uma asserção
+# que SEMPRE falha (espera 404 em /v1/plans que retorna 200) pra provar que o
+# runner de fato reporta erro. Mantemos OFF por padrão (smoke verde em prod);
+# ligamos em verificação periódica da pipeline de smoke (manual/cron mensal).
+# Padrão skill §22: smoke que nunca falha está cego — esse hook prova que não.
+VIRALEFY_SMOKE_SELFCHECK="${VIRALEFY_SMOKE_SELFCHECK:-0}"
 
 FAIL=0
 ok()   { echo "  ok    $*"; }
@@ -258,6 +269,119 @@ except Exception:
         echo "    Body: $(head -c 200 "$TMPBODY")"
       fi
     fi
+  fi
+fi
+
+# ─── 7-11. SSR/i18n/cookie/SEO smoke (rounds 13-17 regressions) ───────────
+# Esses checks batem na superfície do front (Next SSR). Validam o shape REAL
+# do HTML emitido — não só status 200 — para os fixes dos últimos rounds:
+#   - Round 13: i18n SSR completo (PT em /pricing, RTL em AR).
+#   - Round 14: JSON-LD consolidado num único <script> via @graph (BUG-191).
+#   - Round 15: header único no layout (BUG-204), sem duplicação por nested layout.
+#   - Round 16: cookies SSR (vf_theme) lidos no server e refletidos em data-theme.
+#
+# Fail-soft: se o front-host não responde (rollout em progresso, próprio Next
+# subindo), marcamos skip e seguimos — não derrubamos o smoke todo por isso.
+note "SSR/i18n/cookie smoke (rounds 13-17 regressions)"
+
+http_body() {
+  # Usage: http_body <method> <url> [extra curl args...]
+  # Imprime o status code; corpo fica em $TMPBODY.
+  local method="$1" url="$2"; shift 2
+  local out
+  out=$(curl -sS -o "$TMPBODY" -w '%{http_code}' -X "$method" \
+       --max-time 5 --connect-timeout 2 "$@" "$url" 2>/dev/null) || out="000"
+  echo "${out: -3}"
+}
+
+# 7. i18n PT em /pricing (Accept-Language: pt-BR) → <title> com "Preço" ou
+#    "Preços" (Next emite a string traduzida via dictionary PT).
+code="$(http_body GET "http://$FRONT_HOST/pricing" -H 'Accept-Language: pt-BR,pt;q=0.9')"
+if [[ "$code" == "000" ]]; then
+  echo "  skip  front $FRONT_HOST/pricing não responde (rollout?)"
+elif [[ "$code" == "200" ]]; then
+  # Title case-insensitive, aceita "Preços" ou "Preço" (variações).
+  if grep -qiE '<title>[^<]*pre[çc]o' "$TMPBODY"; then
+    ok "/pricing pt-BR → <title> traduzido (BUG i18n round 13)"
+  else
+    bad "/pricing pt-BR → 200 mas <title> não tem 'Preço/Preços' ($(grep -oE '<title>[^<]*' "$TMPBODY" | head -1))"
+  fi
+else
+  bad "/pricing pt-BR → $code (esperado 200)"
+fi
+
+# 8. i18n RTL em /pricing (Accept-Language: ar-SA) → <html dir="rtl">.
+code="$(http_body GET "http://$FRONT_HOST/pricing" -H 'Accept-Language: ar-SA,ar;q=0.9')"
+if [[ "$code" == "000" ]]; then
+  echo "  skip  front $FRONT_HOST/pricing (ar) não responde"
+elif [[ "$code" == "200" ]]; then
+  if grep -qE '<html[^>]*dir="rtl"' "$TMPBODY"; then
+    ok "/pricing ar-SA → <html dir=\"rtl\"> (BUG i18n round 13)"
+  else
+    bad "/pricing ar-SA → 200 mas <html> não tem dir=rtl ($(grep -oE '<html[^>]*' "$TMPBODY" | head -1))"
+  fi
+else
+  bad "/pricing ar-SA → $code (esperado 200)"
+fi
+
+# 9. JSON-LD count na home: exatamente UM <script type="application/ld+json">
+#    (BUG-191 round 14: antes emitia N scripts duplicados; agora consolidado
+#    em @graph).
+code="$(http_body GET "http://$FRONT_HOST/")"
+if [[ "$code" == "000" ]]; then
+  echo "  skip  front $FRONT_HOST/ não responde"
+elif [[ "$code" == "200" ]]; then
+  cnt=$(grep -oE 'application/ld\+json' "$TMPBODY" | wc -l)
+  if [[ "$cnt" == "1" ]]; then
+    ok "/ → exatamente 1 bloco JSON-LD (@graph, BUG-191)"
+  else
+    bad "/ → $cnt blocos JSON-LD (esperado 1, regressão @graph BUG-191)"
+  fi
+else
+  bad "/ → $code (esperado 200)"
+fi
+
+# 10. Header único na home (BUG-204 round 15): exatamente UM <header em todo
+#     o HTML emitido. Layouts aninhados não devem duplicar.
+if [[ "$code" == "200" ]]; then
+  hdr=$(grep -oE '<header[ >]' "$TMPBODY" | wc -l)
+  if [[ "$hdr" == "1" ]]; then
+    ok "/ → exatamente 1 <header> (BUG-204 sem duplicação)"
+  else
+    bad "/ → $hdr <header> tags (esperado 1, regressão BUG-204)"
+  fi
+fi
+
+# 11. Cookies SSR (round 16): vf_theme=dark deve aparecer como data-theme="dark"
+#     no <html> emitido. Prova que o server lê o cookie e propaga pro markup
+#     (não fica esperando hidratação client-side, evitando FOUC).
+code="$(http_body GET "http://$FRONT_HOST/" -b 'vf_theme=dark')"
+if [[ "$code" == "000" ]]; then
+  echo "  skip  front $FRONT_HOST/ (cookie) não responde"
+elif [[ "$code" == "200" ]]; then
+  if grep -qE '<html[^>]*data-theme="dark"' "$TMPBODY"; then
+    ok "/ vf_theme=dark cookie → data-theme=\"dark\" no SSR (round 16)"
+  else
+    bad "/ vf_theme=dark cookie → SSR não refletiu data-theme=dark ($(grep -oE '<html[^>]*' "$TMPBODY" | head -1))"
+  fi
+else
+  bad "/ vf_theme=dark → $code (esperado 200)"
+fi
+
+# 12. Self-check (padrão skill §22): asserção que SEMPRE falha — espera 404
+#     em /v1/plans que sabemos retornar 200. Quando VIRALEFY_SMOKE_SELFCHECK=1
+#     forçamos FAIL pra provar que o reporter detecta erro. Sem isso o smoke
+#     fica cego (sempre verde mesmo se assertions estiverem quebradas).
+#     OFF por padrão; rodar manualmente com:
+#         VIRALEFY_SMOKE_SELFCHECK=1 viralefy-smoke
+#     Esperado: exit 1, com FAIL na linha "[self-check]". Cron mensal opcional.
+if [[ "$VIRALEFY_SMOKE_SELFCHECK" == "1" ]]; then
+  note "[self-check] forçando FAIL conhecido (espera 404 em /v1/plans)"
+  code="$(http_code GET "http://$API_HOST/v1/plans")"
+  if [[ "$code" == "404" ]]; then
+    ok "[self-check] /v1/plans → 404 (??? deveria ter sido 200 — investigar)"
+  else
+    bad "[self-check] /v1/plans → $code (esperado 404 PROPOSITAL — reporter OK)"
   fi
 fi
 
