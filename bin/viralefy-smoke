@@ -331,7 +331,11 @@ code="$(http_body GET "http://$FRONT_HOST/")"
 if [[ "$code" == "000" ]]; then
   echo "  skip  front $FRONT_HOST/ não responde"
 elif [[ "$code" == "200" ]]; then
-  cnt=$(grep -oE 'application/ld\+json' "$TMPBODY" | wc -l)
+  # Conta apenas TAGS <script type="application/ld+json"> de verdade. Greppar a
+  # string crua matcha também o RSC payload do Next (que serializa o JSX com
+  # `"type":"application/ld+json"` pro hydrate), gerando falso positivo de 2
+  # quando há só 1 tag real. Anchora no `<script ` ou `<script>`.
+  cnt=$(grep -oE '<script[^>]+type="application/ld\+json"' "$TMPBODY" | wc -l)
   if [[ "$cnt" == "1" ]]; then
     ok "/ → exatamente 1 bloco JSON-LD (@graph, BUG-191)"
   else
